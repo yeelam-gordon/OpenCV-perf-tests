@@ -10,15 +10,26 @@ $source = Join-Path $root 'opencv'
 $tools = Join-Path $root 'tools'
 New-Item -ItemType Directory -Path $tools | Out-Null
 $archive = Join-Path $tools 'cmake.zip'
-Invoke-WebRequest 'https://github.com/Kitware/CMake/releases/download/v4.1.1/cmake-4.1.1-windows-arm64.zip' -OutFile $archive
-if ((Get-FileHash -LiteralPath $archive).Hash -ne '1d968879344bcdd29ddeaa3480ea6e7716db0de518b220743b82c7f1750b5c9b') {
+Invoke-WebRequest 'https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-windows-arm64.zip' -OutFile $archive
+if ((Get-FileHash -LiteralPath $archive).Hash -ne 'ed673bbc4eb7c1e59b0407fd52f1680fc0ae3229a46b9b7b3ea9133764f07f67') {
     throw ' ERROR - Official pinned CMake archive checksum mismatch.'
 }
 Expand-Archive -LiteralPath $archive -DestinationPath $tools
-$cmake = Join-Path $tools 'cmake-4.1.1-windows-arm64\bin\cmake.exe'
+$cmake = Join-Path $tools 'cmake-4.4.4-windows-arm64\bin\cmake.exe'
 Assert-NativeExecutable $cmake 'arm64'
-& (Join-Path $repo 'scripts\setup.ps1') -Root $source -Generator MSBuild -CMake $cmake
-$build = Get-BuildDirectory $source 'MSBuild'
+$vs = Get-VisualStudio 18
+$compiler = Join-Path $vs.tools 'bin\Hostarm64\arm64\cl.exe'
+Assert-NativeExecutable $compiler 'arm64'
+$profile = [ordered]@{
+    profile_kind = 'Observed installed CI tools, pinned for this job; not a historical/latest-release claim.'
+    visual_studio_build = $vs.version
+    msvc_toolset = $vs.toolset
+    compiler_version = (Get-Item -LiteralPath $compiler).VersionInfo.FileVersion
+    cmake_version = '4.4.4'
+}
+$profile | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $repo 'toolchains\vs2026.json')
+& (Join-Path $repo 'scripts\setup.ps1') -Root $source -Generator MSBuild -Toolchain MSVC2026 -CMake $cmake
+$build = Get-BuildDirectory $source 'MSBuild' 'MSVC2026'
 Copy-Item -LiteralPath (Join-Path $build 'benchmark-setup.json') -Destination $evidence
 $order = @('baseline', 'shared', 'shared', 'baseline')
 $study = [ordered]@{
@@ -55,7 +66,7 @@ try {
         }
         Start-Sleep -Seconds 30
         & $shell -NoProfile -File (Join-Path $repo 'scripts\run.ps1') -Root $source `
-            -ResultsDir $evidence -Generator MSBuild -Label $label @options
+            -ResultsDir $evidence -Generator MSBuild -Toolchain MSVC2026 -Label $label @options
         if ($LASTEXITCODE) { throw " ERROR - Build failed: $label" }
         $runs = @(Get-ChildItem -LiteralPath $evidence -Directory | Where-Object Name -Like "*_$label")
         if ($runs.Count -ne 1) { throw " ERROR - Expected one run receipt: $label" }
@@ -67,8 +78,8 @@ try {
         $study.runs += @{ label = $label; variant = $variant; directory = $run.Name; seconds = $receipt.build_seconds }
         $study | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence 'study.json')
     }
-    & (Join-Path $repo 'tests\smoke_opencv.ps1') -Root $source -Generator MSBuild
-    $smokeDir = Join-Path $repo '.work\smoke_MSVC_MSBuild'
+    & (Join-Path $repo 'tests\smoke_opencv.ps1') -Root $source -Generator MSBuild -Toolchain MSVC2026
+    $smokeDir = Join-Path $repo '.work\smoke_MSVC2026_MSBuild'
     foreach ($run in $study.runs) {
         $directory = Join-Path $evidence $run.directory
         Copy-Item -LiteralPath (Join-Path $directory 'runtime-binaries\opencv_world4100.dll') `

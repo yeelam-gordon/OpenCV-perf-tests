@@ -12,11 +12,11 @@ mkdir -p "$root"
 trap 'status=$?; printf "%s\n" "$status" > "$evidence/script-exit-code.txt"' EXIT
 
 curl --fail --location --silent --show-error \
-  https://github.com/Kitware/CMake/releases/download/v4.1.1/cmake-4.1.1-macos-universal.tar.gz \
+  https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-macos-universal.tar.gz \
   -o "$root/cmake.tar.gz"
-echo "3cd1da5341618645bdc85a3b99e273f29c4d48db2f545925a658db992e61f6f9  $root/cmake.tar.gz" | shasum -a 256 -c -
+echo "4b7b73704b1db9b374e5c9ab8e17ac6148b817b6396ee75cd94a852cbac9d305  $root/cmake.tar.gz" | shasum -a 256 -c -
 tar -xzf "$root/cmake.tar.gz" -C "$root"
-cmake="$root/cmake-4.1.1-macos-universal/CMake.app/Contents/bin/cmake"
+cmake="$root/cmake-4.4.4-macos-universal/CMake.app/Contents/bin/cmake"
 test -x "$cmake"
 file "$cmake" | tee "$evidence/cmake-architecture.txt"
 brew list --versions ffmpeg@6 >/dev/null 2>&1 || brew install ffmpeg@6
@@ -54,7 +54,7 @@ printf '%s\n' "${flags[@]}" > "$evidence/configure-definitions.txt"
 "$cmake" -S "$root/opencv" -B "$root/build" -G "Unix Makefiles" \
   "${flags[@]}" > "$evidence/configure.log" 2>&1
 cp "$root/build/CMakeCache.txt" "$evidence/"
-cp "$root/build/CMakeFiles/4.1.1/CMakeCXXCompiler.cmake" "$evidence/"
+cp "$root/build/CMakeFiles/4.4.4/CMakeCXXCompiler.cmake" "$evidence/"
 jobs="$(sysctl -n hw.ncpu)"
 for index in 1 2; do
   run="$evidence/baseline_$index"

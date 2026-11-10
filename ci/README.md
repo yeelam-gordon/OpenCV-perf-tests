@@ -6,12 +6,16 @@ self-hosted lab runner. Four jobs, each bounded to 90 minutes, no automatic retr
 
 | Job | Workload | Observations |
 |---|---|---|
-| Windows standard storage | OpenCV 4.10.0, existing 23-definition benchmark, VS 2022/MSVC/MSBuild | Baseline/shared/shared/baseline, two builds per schedule |
+| Windows standard storage | OpenCV 4.10.0, existing 23-definition benchmark, installed native VS 2026/MSVC/MSBuild | Baseline/shared/shared/baseline, two builds per schedule |
 | Windows Dev Drive | Same definitions, source, tool requirements and order; source/build/downloads/temp on newly created Dev Drive | Two builds per schedule; explicitly ineligible if the runner has no single safe unused NVMe disk or D: is occupied |
 | macOS matched definitions | Same 23 definitions as Windows; native Apple Clang and Make | Two clean builds |
 | macOS HOBL-native | Inspected HOBL macOS definitions, including examples enabled and no world-library requirement; native Make | Two clean builds; separate workload, not interchangeable with matched results |
 
-CMake 4.1.1 archives are pinned by official release SHA-256 on both systems.
+CMake 4.4.4 archives are pinned by official release SHA-256 on both systems.
+The first hosted attempt exposed the label's VS 2026 migration: native VS 2022
+was unavailable. Discover installed VS 2026, write its observed versions to a
+job-local profile, then retain all existing setup/run pin/hash checks. This is
+a new CI toolchain series, not an exact historical-toolchain reproduction.
 OpenCV must resolve to `71d3237a093b60a27601c20e9ee6c3e52154e8b1`.
 macOS uses FFmpeg 6; Windows uses OpenCV's own configured dependencies.
 Source/options match where declared; platform features, dependencies, SDKs,

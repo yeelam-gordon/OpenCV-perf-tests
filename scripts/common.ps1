@@ -181,10 +181,7 @@ function Set-NativeToolchain($VisualStudio, $WindowsSDK = (Get-WindowsSDK)) {
 
 function Get-EffectiveGenerator([string]$Generator, [string]$Toolchain, [bool]$ExplicitGenerator) {
     if ($Toolchain -in @('MSVC2026', 'MSVC2026Latest')) {
-        if ($ExplicitGenerator -and $Generator -ne 'MSBuild') {
-            throw ' ERROR - The VS 2026 experiment requires the MSBuild generator.'
-        }
-        return 'MSBuild'
+        return $Generator
     }
     if ($Toolchain -eq 'Clang') {
         if ($ExplicitGenerator -and $Generator -ne 'Ninja') {
@@ -257,6 +254,10 @@ function Get-ClangToolchain([string]$LLVMRoot) {
 }
 
 function Get-BuildDirectory([string]$Root, [string]$Generator, [string]$Toolchain = 'MSVC') {
+    if ($Generator -eq 'Ninja' -and $Toolchain -in @('MSVC2026', 'MSVC2026Latest')) {
+        $suffix = if ($Toolchain -eq 'MSVC2026Latest') { 'latest_ninja' } else { 'ninja' }
+        return Join-Path $Root "build_hobl_msvc2026_$suffix"
+    }
     if ($Toolchain -eq 'MSVC2026Latest') { return Join-Path $Root 'build_hobl_msvc2026_latest' }
     if ($Toolchain -eq 'MSVC2026') { return Join-Path $Root 'build_hobl_msvc2026' }
     if ($Toolchain -eq 'Clang') { return Join-Path $Root 'build_hobl_clang_ninja' }

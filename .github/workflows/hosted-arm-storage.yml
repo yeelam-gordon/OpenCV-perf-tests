@@ -1,78 +1,76 @@
-name: Hosted Arm storage and scheduling screen
+name: Qualified native generator comparison
 
 on:
   workflow_dispatch:
-    inputs:
-      lanes:
-        description: Run all lanes or only the platform needing new evidence
-        type: choice
-        options: [all, windows, macos]
-        default: all
 
 permissions:
   contents: read
 
 concurrency:
-  group: hosted-arm-storage-${{ inputs.lanes }}
+  group: qualified-native-generator-comparison
   cancel-in-progress: false
 
 jobs:
   windows:
-    if: inputs.lanes != 'macos'
-    name: Windows Arm / ${{ matrix.storage }}
+    name: Windows Arm original/shared/aligned-Ninja
     runs-on: windows-11-arm
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        storage: [standard, devdrive]
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Validate non-destructive storage guards
-        shell: pwsh
-        run: .\ci\Test-StorageGuards.ps1
-      - name: Prepare isolated build storage
-        id: storage
+      - name: Configure pinned workload and observed native tools
         shell: pwsh
         env:
           HOSTING: ${{ runner.environment }}
-        run: .\ci\Prepare-WindowsStorage.ps1 -Mode '${{ matrix.storage }}'
-      - name: Run matched baseline and shared-cap builds
-        if: steps.storage.outputs.applied == 'true'
+        run: |
+          .\tests\test_native_generator_selection.ps1
+          .\tests\test_generator_failure_cleanup.ps1
+          python .\tests\test_generator_smoke_evidence.py
+          if ($LASTEXITCODE) { throw 'Smoke failure-evidence tests failed.' }
+          .\ci\Prepare-QualifiedGeneratorWorkload.ps1
+      - name: Run same-VM balanced original/shared/aligned-Ninja series
         shell: pwsh
-        run: .\ci\Run-WindowsScreen.ps1
-      - name: Retain evidence, including ineligible storage and failures
+        run: .\ci\Run-QualifiedGeneratorStudy.ps1 -ResultsDir "$env:GITHUB_WORKSPACE\evidence\builds" -IncludeOriginal
+      - name: Retain text evidence including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-${{ matrix.storage }}
-          path: evidence
+          name: windows-qualified-generators
+          path: |
+            evidence/**/*.json
+            evidence/**/*.log
+            evidence/**/*.txt
+            evidence/**/*.csv
+            evidence/**/*.trace
+            evidence/**/*.hpp
+            evidence/**/*.h
+            evidence/**/*.cmake
+            evidence/**/*.ninja
           if-no-files-found: error
-
   macos:
-    if: inputs.lanes != 'windows'
-    name: macOS Arm / ${{ matrix.profile }}
+    name: macOS Arm matched-definition reference
     runs-on: macos-15
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        profile: [matched, hobl-native]
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Run native Make clean-build screen
+      - name: Run matched definitions with excluded warmup
         shell: bash
-        run: bash ci/run-macos-screen.sh '${{ matrix.profile }}'
-      - name: Retain evidence, including failures
+        run: bash ci/run-macos-screen.sh matched
+      - name: Retain text evidence including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: macos-${{ matrix.profile }}
-          path: evidence
+          name: macos-qualified-reference
+          path: |
+            evidence/**/*.json
+            evidence/**/*.log
+            evidence/**/*.txt
+            evidence/**/*.csv
+            evidence/**/*.trace
+            evidence/**/*.hpp
+            evidence/**/*.h
+            evidence/**/*.cmake
           if-no-files-found: error

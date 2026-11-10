@@ -1,5 +1,9 @@
 # Hosted Arm build/storage screen
 
+**Branch note:** the current workflow on `perf/qualified-generator-ci` is
+[qualified native generators](QUALIFIED_GENERATORS.md). The storage-screen
+description below is historical; that optional crossover is not dispatched.
+
 Manual-only experimental workflow: `hosted-arm-storage.yml`.
 It runs only on GitHub-hosted `windows-11-arm` and `macos-15`, never an inherited
 self-hosted lab runner. Four jobs, each bounded to 90 minutes, no automatic retry.

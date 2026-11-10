@@ -56,7 +56,7 @@ printf '%s\n' "${flags[@]}" > "$evidence/configure-definitions.txt"
 cp "$root/build/CMakeCache.txt" "$evidence/"
 cp "$root/build/CMakeFiles/4.4.4/CMakeCXXCompiler.cmake" "$evidence/"
 jobs="$(sysctl -n hw.ncpu)"
-for index in 1 2; do
+for index in warmup 1 2; do
   run="$evidence/baseline_$index"
   mkdir "$run"
   make -C "$root/build" clean > "$run/clean.log" 2>&1
@@ -88,7 +88,7 @@ for index in (1, 2):
     "status": "succeeded", "profile": sys.argv[2], "jobs": int(sys.argv[3]),
     "source": "71d3237a093b60a27601c20e9ee6c3e52154e8b1", "generator": "Unix Makefiles",
     "workflow_commit": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"],
-    "runs": runs, "warmups": 0,
-    "limitations": "Two clean builds, no discarded warmup, uncontrolled hosted VM; matched definitions do not make platform dependencies/features or hardware identical. HOBL-native profile is a separate workload, not an interchangeable score."
+    "runs": runs, "warmups": 1, "warmups_excluded": True,
+    "limitations": "Two scored clean builds after one excluded warmup, uncontrolled hosted VM; matched definitions do not make platform dependencies/features or hardware identical. Native HOBL macOS definitions remain a separate workload."
 }, indent=2))
 PY

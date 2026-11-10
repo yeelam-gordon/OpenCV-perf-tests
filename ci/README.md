@@ -3,6 +3,8 @@
 Manual-only experimental workflow: `hosted-arm-storage.yml`.
 It runs only on GitHub-hosted `windows-11-arm` and `macos-15`, never an inherited
 self-hosted lab runner. Four jobs, each bounded to 90 minutes, no automatic retry.
+The `lanes` input can restrict a corrective dispatch to two Windows or two macOS
+jobs, preserving valid results from the other platform instead of repeating it.
 
 | Job | Workload | Observations |
 |---|---|---|

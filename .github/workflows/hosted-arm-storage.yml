@@ -2,16 +2,23 @@ name: Hosted Arm storage and scheduling screen
 
 on:
   workflow_dispatch:
+    inputs:
+      lanes:
+        description: Run all lanes or only the platform needing new evidence
+        type: choice
+        options: [all, windows, macos]
+        default: all
 
 permissions:
   contents: read
 
 concurrency:
-  group: hosted-arm-storage
+  group: hosted-arm-storage-${{ inputs.lanes }}
   cancel-in-progress: false
 
 jobs:
   windows:
+    if: inputs.lanes != 'macos'
     name: Windows Arm / ${{ matrix.storage }}
     runs-on: windows-11-arm
     timeout-minutes: 90
@@ -46,6 +53,7 @@ jobs:
           if-no-files-found: error
 
   macos:
+    if: inputs.lanes != 'windows'
     name: macOS Arm / ${{ matrix.profile }}
     runs-on: macos-15
     timeout-minutes: 90

@@ -20,16 +20,29 @@ Assert-NativeExecutable $cmake 'arm64'
 $vs = Get-VisualStudio 18
 $compiler = Join-Path $vs.tools 'bin\Hostarm64\arm64\cl.exe'
 Assert-NativeExecutable $compiler 'arm64'
+$msbuild = Join-Path $vs.path 'MSBuild\Current\Bin\arm64\MSBuild.exe'
+Assert-NativeExecutable $msbuild 'arm64'
+$msbuildVersion = & $msbuild -nologo -version
+if ($LASTEXITCODE) { throw ' ERROR - Native MSBuild version lookup failed.' }
 $profile = [ordered]@{
     profile_kind = 'Observed installed CI tools, pinned for this job; not a historical/latest-release claim.'
     visual_studio_build = $vs.version
     msvc_toolset = $vs.toolset
     compiler_version = (Get-Item -LiteralPath $compiler).VersionInfo.FileVersion
+    msbuild_version = "$msbuildVersion".Trim()
     cmake_version = '4.4.4'
 }
 $profile | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $repo 'toolchains\vs2026.json')
-& (Join-Path $repo 'scripts\setup.ps1') -Root $source -Generator MSBuild -Toolchain MSVC2026 -CMake $cmake
+$profile | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'observed-vs2026.json')
 $build = Get-BuildDirectory $source 'MSBuild' 'MSVC2026'
+try {
+    & (Join-Path $repo 'scripts\setup.ps1') -Root $source -Generator MSBuild -Toolchain MSVC2026 -CMake $cmake
+} finally {
+    foreach ($name in @('configure.log', 'CMakeCache.txt', 'msbuild-version.log', 'sdk-properties.json')) {
+        $file = Join-Path $build $name
+        if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination $evidence }
+    }
+}
 Copy-Item -LiteralPath (Join-Path $build 'benchmark-setup.json') -Destination $evidence
 $order = @('baseline', 'shared', 'shared', 'baseline')
 $study = [ordered]@{

@@ -1,0 +1,70 @@
+name: Hosted Arm storage and scheduling screen
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-arm-storage
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows Arm / ${{ matrix.storage }}
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        storage: [standard, devdrive]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate non-destructive storage guards
+        shell: pwsh
+        run: .\ci\Test-StorageGuards.ps1
+      - name: Prepare isolated build storage
+        id: storage
+        shell: pwsh
+        env:
+          HOSTING: ${{ runner.environment }}
+        run: .\ci\Prepare-WindowsStorage.ps1 -Mode '${{ matrix.storage }}'
+      - name: Run matched baseline and shared-cap builds
+        if: steps.storage.outputs.applied == 'true'
+        shell: pwsh
+        run: .\ci\Run-WindowsScreen.ps1
+      - name: Retain evidence, including ineligible storage and failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-${{ matrix.storage }}
+          path: evidence
+          if-no-files-found: error
+
+  macos:
+    name: macOS Arm / ${{ matrix.profile }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        profile: [matched, hobl-native]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Run native Make clean-build screen
+        shell: bash
+        run: bash ci/run-macos-screen.sh '${{ matrix.profile }}'
+      - name: Retain evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-${{ matrix.profile }}
+          path: evidence
+          if-no-files-found: error

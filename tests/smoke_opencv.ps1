@@ -2,12 +2,13 @@
 param(
     [string]$Root = '',
     [ValidateSet('MSVC', 'Clang', 'MSVC2026', 'MSVC2026Latest')][string]$Toolchain = 'MSVC',
-    [ValidateSet('MSBuild', 'Ninja')][string]$Generator = 'Ninja'
+    [ValidateSet('MSBuild', 'Ninja')][string]$Generator = 'Ninja',
+    [string]$BuildDirectory = ''
 )
 . "$PSScriptRoot\..\scripts\common.ps1"
 $Root = Get-SourceRoot $Root
 $Generator = Get-EffectiveGenerator $Generator $Toolchain ($PSBoundParameters.ContainsKey('Generator'))
-$buildDir = Get-BuildDirectory $Root $Generator $Toolchain
+$buildDir = Resolve-BuildDirectory $Root $Generator $Toolchain $BuildDirectory
 $receipt = Get-Content "$buildDir\benchmark-setup.json" -Raw | ConvertFrom-Json
 Assert-WindowsSDK $receipt $Toolchain
 $cmake = Get-CMake $receipt.cmake (Get-ToolchainCMakeVersion $Toolchain)

@@ -9,6 +9,7 @@ try {
         @{ EnableClServerMode = $true },
         @{ MSBuildStudyPlan = 'fixture'; Generator = 'Ninja' },
         @{ MSBuildStudyPlan = 'fixture'; Profile = $true }
+        @{ MSBuildStudyPlan = 'fixture'; MSBuildStudyConfiguration = 'combined' }
         @{ MSBuildStudyPlan = 'fixture'; MSBuildScheduler = 'MultiToolTask'; SharedCompilerLimit = $true }
         @{ MSBuildStudyPlan = 'fixture'; MSBuildScheduler = 'MultiToolTask'; SharedCompilerLimit = $true;
             EnableClServerMode = $true; CompilerJobs = 8; Parallel = 4 }
@@ -17,8 +18,18 @@ try {
     )) {
         $caught = $null
         try { & "$repo\scripts\run.ps1" -Root $scratch @case } catch { $caught = $_ }
-        if ($null -eq $caught -or $caught.Exception.Message -notmatch 'CL server requires|paired MSBuild study') {
+        if ($null -eq $caught -or $caught.Exception.Message -notmatch 'CL server requires|paired MSBuild study|combined profile requires') {
             throw 'Invalid study mode reached source/configure/build work.'
+        }
+        . "$repo\scripts\common.ps1"
+        $profile = Join-Path $scratch 'combined'
+        if ((Resolve-BuildDirectory $scratch 'MSBuild' 'MSVC2026' $profile) -ne $profile) {
+            throw 'Isolated profile directory was not retained.'
+        }
+        foreach ($override in @((Join-Path $scratch '..\outside'), $scratch)) {
+            $caught = $null
+            try { Resolve-BuildDirectory $scratch 'MSBuild' 'MSVC2026' $override | Out-Null } catch { $caught = $_ }
+            if ($null -eq $caught) { throw 'Profile override escaped its isolated source child.' }
         }
     }
     if (-not ('BuildAccounting' -as [type])) { Add-Type -Path "$repo\scripts\BuildAccounting.cs" }

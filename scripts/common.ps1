@@ -275,6 +275,7 @@ function Get-InstalledOpenCVFile([string]$BuildDirectory, [string]$Name) {
             if (-not $path.StartsWith($install, [StringComparison]::OrdinalIgnoreCase)) {
                 throw " ERROR - Install manifest entry is outside the benchmark install directory: $path"
             }
+
             Get-Item -LiteralPath $path -ErrorAction Stop
         })
     if ($Name -eq 'OpenCVConfig.cmake') {
@@ -282,6 +283,16 @@ function Get-InstalledOpenCVFile([string]$BuildDirectory, [string]$Name) {
     }
     if ($files.Count -ne 1) { throw " ERROR - Expected one current installed $Name; found $($files.Count)." }
     return $files[0]
+}
+
+function Resolve-BuildDirectory([string]$Root, [string]$Generator, [string]$Toolchain, [string]$Override) {
+    if (-not $Override) { return Get-BuildDirectory $Root $Generator $Toolchain }
+    $path = [IO.Path]::GetFullPath($Override)
+    $owner = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    if ($Generator -ne 'MSBuild' -or -not $path.StartsWith($owner, [StringComparison]::OrdinalIgnoreCase)) {
+        throw ' ERROR - An explicit MSBuild profile directory must remain below its source root.'
+    }
+    return $path
 }
 
 function Invoke-Logged([string]$Executable, [string[]]$Arguments, [string]$Log) {

@@ -5,7 +5,8 @@ param(
     [ValidateSet('MSVC', 'Clang', 'MSVC2026', 'MSVC2026Latest')][string]$Toolchain = 'MSVC',
     [string]$LLVMRoot = '',
     [string]$InitialCache = '',
-    [string]$CMake = ''
+    [string]$CMake = '',
+    [string]$BuildDirectory = ''
 )
 . "$PSScriptRoot\common.ps1"
 $Root = Get-SourceRoot $Root
@@ -30,7 +31,7 @@ if (-not (Test-Path $Root)) {
     if ($LASTEXITCODE -ne 0) { throw ' ERROR - OpenCV clone failed.' }
 }
 Assert-Source $Root
-$buildDir = Get-BuildDirectory $Root $Generator $Toolchain
+$buildDir = Resolve-BuildDirectory $Root $Generator $Toolchain $BuildDirectory
 $llvm = if ($Toolchain -eq 'Clang') { Get-ClangToolchain $LLVMRoot } else { $null }
 New-Item -ItemType Directory -Force $buildDir | Out-Null
 $argsList = @('--fresh', '-S', $Root, '-B', $buildDir) + @($script:Config.cmake_flags)

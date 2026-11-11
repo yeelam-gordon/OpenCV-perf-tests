@@ -144,9 +144,10 @@ def dls_object(entries, source, build, generator):
     return path
 
 
-def capture(source, build, run, generator):
-    commands = load(run / "commands.json")
-    entries = compilation_entries(commands, generator)
+def capture(source, build, run, generator, entries=None):
+    if entries is None:
+        commands = load(run / "commands.json")
+        entries = compilation_entries(commands, generator)
     records, world = unit_manifest(entries, source, build, generator)
     object_file = dls_object(entries, source, build, generator)
     target = run / "runtime-binaries" / object_file.name

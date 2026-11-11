@@ -14,7 +14,9 @@ param(
     [ValidateRange(1, 256)][int]$CompilerJobs = 12,
     [switch]$SharedCompilerLimit,
     [switch]$EnableClServerMode,
-    [string]$MSBuildStudyPlan = ''
+    [string]$MSBuildStudyPlan = '',
+    [string]$BuildDirectory = '',
+    [ValidateSet('original', 'server', 'combined')][string]$MSBuildStudyConfiguration = 'original'
 )
 . "$PSScriptRoot\common.ps1"
 Assert-NoPendingToolchainRestart
@@ -46,6 +48,9 @@ if ($EnableClServerMode -and -not $MSBuildStudyPlan) {
     throw ' ERROR - CL server requires the paired owned-lifecycle plan.'
 }
 if ($MSBuildStudyPlan) {
+    if ($MSBuildStudyConfiguration -eq 'combined' -and -not $EnableClServerMode) {
+        throw ' ERROR - The combined profile requires native CL-server selection.'
+    }
     if ($EnableClServerMode) {
         if ($Parallel -ne 4 -or $CompilerJobs -ne 4) {
             throw ' ERROR - The paired MSBuild study candidate requires budget4 settings.'
@@ -66,7 +71,7 @@ if ($MSBuildScheduler -eq 'MultiToolTask') {
     if ($EnableClServerMode) { $schedulerArguments += '/p:EnableClServerMode=true' }
 }
 Assert-Source $Root
-$buildDir = Get-BuildDirectory $Root $Generator $Toolchain
+$buildDir = Resolve-BuildDirectory $Root $Generator $Toolchain $BuildDirectory
 if (-not (Test-Path "$buildDir\benchmark-setup.json")) { throw ' ERROR - Run setup.ps1 for this generator first.' }
 $receipt = Get-Content "$buildDir\benchmark-setup.json" -Raw | ConvertFrom-Json
 Assert-WindowsSDK $receipt $Toolchain
@@ -165,7 +170,7 @@ try {
         if ($schedulerArguments.Count) { $cleanArguments += @('--') + $schedulerArguments }
         $clean = Invoke-Logged $cmakeExe $cleanArguments "$runDir\clean.log"
         if ($MSBuildStudyPlan) {
-            & python "$PSScriptRoot\..\ci\msbuild-clserver-evidence.py" clean --source $Root --build $buildDir --run $runDir --plan $MSBuildStudyPlan
+            & python "$PSScriptRoot\..\ci\msbuild-clserver-evidence.py" clean --source $Root --build $buildDir --run $runDir --plan $MSBuildStudyPlan --configuration $MSBuildStudyConfiguration
             if ($LASTEXITCODE) { throw ' ERROR - Required native outputs remain before the build clock.' }
         }
         if ($Generator -eq 'Ninja' -and (Test-Path "$buildDir\.ninja_log")) {
@@ -181,7 +186,7 @@ try {
         $metadata['build_arguments'] = $argsList
         if ($MSBuildStudyPlan) {
             $build = Invoke-OwnedBuild $cmakeExe $argsList $buildDir $runDir
-            & python "$PSScriptRoot\..\ci\msbuild-clserver-evidence.py" capture --source $Root --build $buildDir --run $runDir --plan $MSBuildStudyPlan
+            & python "$PSScriptRoot\..\ci\msbuild-clserver-evidence.py" capture --source $Root --build $buildDir --run $runDir --plan $MSBuildStudyPlan --configuration $MSBuildStudyConfiguration
             if ($LASTEXITCODE) { throw ' ERROR - Timed source/output proof failed before direct install.' }
         } elseif ($MeasureCpu) {
             $accounting = Invoke-MeasuredBuild $cmakeExe $argsList $buildDir $runDir -Trace:$Trace

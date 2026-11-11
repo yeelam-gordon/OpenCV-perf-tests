@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$ResultsDir,
     [string]$SourceRoot = '',
     [switch]$IncludeOriginal,
-    [switch]$ClServerStudy
+    [switch]$ClServerStudy,
+    [switch]$CombinedPch
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -14,6 +15,7 @@ $source = if ($SourceRoot) { [IO.Path]::GetFullPath($SourceRoot) } else {
 }
 $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 . (Join-Path $harness 'scripts\common.ps1')
+if ($CombinedPch -and -not $ClServerStudy) { throw ' ERROR - Combined PCH requires the owned native MSBuild study.' }
 Assert-Source $source
 if ($ClServerStudy) {
     if ($env:GITHUB_ACTIONS -ne 'true' -or [Environment]::ProcessorCount -ne 4 -or
@@ -63,15 +65,30 @@ if ($ClServerStudy) {
     $study.original_reference_included = $true
     $study['limitations'] = 'Different-residency resource profile; not a four-resident/busy/global cap. Two scored observations per case; no historical/local transfer, forecast or adoption.'
 }
+if ($CombinedPch) {
+    $study.scope = 'New direct original MSVC/MSBuild versus shared4 + CL-server + private six-standard-header world PCH.'
+    $study.order = @('warmup_original', 'warmup_combined', 'original_1', 'combined_1', 'combined_2', 'original_2')
+    $study['combined_pch'] = $true
+}
 $frozen = @{}
 $builds = @{}
 $cleanupScript = Join-Path $PSScriptRoot 'Remove-StudyRuntimeBinaries.ps1'
 $primaryFailure = $null
 try {
     $generators = if ($ClServerStudy) { @('MSBuild') } else { @('MSBuild', 'Ninja') }
+    $configured = @{}
     foreach ($generator in $generators) {
         $build = Get-BuildDirectory $source $generator 'MSVC2026'
         $builds[$generator] = $build
+        $configured[$build] = $generator
+    }
+    if ($CombinedPch) {
+        $builds.combined = Join-Path $source 'build_hobl_msvc2026_combined'
+        $configured[$builds.combined] = 'MSBuild'
+    }
+    foreach ($profile in $configured.GetEnumerator()) {
+        $build = $profile.Key
+        $generator = $profile.Value
         $inputs = @(Get-Item -LiteralPath (Join-Path $build 'CMakeCache.txt'),
             (Join-Path $build 'benchmark-setup.json'))
         $setup = Get-Content -LiteralPath (Join-Path $build 'benchmark-setup.json') -Raw | ConvertFrom-Json
@@ -99,15 +116,22 @@ try {
     if ($ClServerStudy) {
         if (-not ('BuildAccounting' -as [type])) { Add-Type -Path (Join-Path $harness 'scripts\BuildAccounting.cs') }
         $plan = Join-Path $ResultsDir 'native-plan.json'
-        & $python (Join-Path $PSScriptRoot 'msbuild-clserver-evidence.py') plan --source $source --build $builds.MSBuild --plan $plan
+        $planOptions = if ($CombinedPch) { @('--candidate-build', $builds.combined) } else { @() }
+        & $python (Join-Path $PSScriptRoot 'msbuild-clserver-evidence.py') plan --source $source --build $builds.MSBuild --plan $plan @planOptions
         if ($LASTEXITCODE) { throw ' ERROR - Native MSBuild source/profile plan failed.' }
         $nativePlan = Get-Content -LiteralPath $plan -Raw | ConvertFrom-Json
         $setup = Get-Content -LiteralPath (Join-Path $builds.MSBuild 'benchmark-setup.json') -Raw | ConvertFrom-Json
         $inputs = @(Get-Item -LiteralPath $plan, $nativePlan.stock_server_targets,
             $setup.compiler, $setup.cmake, $setup.build_engine.path, $setup.build_engine.linker)
-        $inputs += @(Get-ChildItem -LiteralPath $builds.MSBuild -Recurse -File -Include *.cmake)
-        foreach ($name in @('cvconfig.h', 'opencv2\opencv_modules.hpp', 'cv_cpu_config.h')) {
-            $inputs += Get-Item -LiteralPath (Join-Path $builds.MSBuild $name)
+        foreach ($profileBuild in $configured.Keys) {
+            $inputs += @(Get-ChildItem -LiteralPath $profileBuild -Recurse -File -Include *.cmake)
+            foreach ($name in @('cvconfig.h', 'opencv2\opencv_modules.hpp', 'cv_cpu_config.h')) {
+                $inputs += Get-Item -LiteralPath (Join-Path $profileBuild $name)
+            }
+        }
+        if ($CombinedPch) {
+            $inputs += Get-Item -LiteralPath $nativePlan.cases.combined.pch.wrapper,
+                $nativePlan.cases.combined.pch.producer.file
         }
         foreach ($directory in @('scripts', 'ci', 'tests', 'toolchains')) {
             $inputs += @(Get-ChildItem -LiteralPath (Join-Path $harness $directory) -Recurse -File |
@@ -127,6 +151,8 @@ try {
         }
         if ((& powercfg /getactivescheme | Out-String).Trim() -ne $power) { throw ' ERROR - Power scheme changed.' }
         $generator = if ($label -match 'ninja') { 'Ninja' } else { 'MSBuild' }
+        $caseBuild = if ($CombinedPch -and $label -match 'combined') { $builds.combined } else { $builds[$generator] }
+        $configuration = if ($label -match 'original') { 'original' } elseif ($CombinedPch) { 'combined' } else { 'server' }
         $options = @()
         if ($label -notmatch 'original') { $options += @('-Parallel', "$($study.jobs)") }
         if ($label -match 'shared') {
@@ -134,7 +160,10 @@ try {
         }
         if ($ClServerStudy) {
             $options = @('-MSBuildStudyPlan', $plan)
-            if ($label -match 'server') {
+            if ($CombinedPch) {
+                $options += @('-BuildDirectory', $caseBuild, '-MSBuildStudyConfiguration', $configuration)
+            }
+            if ($label -match 'server|combined') {
                 $options += @('-Parallel', '4', '-MSBuildScheduler', 'MultiToolTask', '-CompilerJobs', '4',
                     '-SharedCompilerLimit', '-EnableClServerMode')
             }
@@ -149,16 +178,17 @@ try {
         $run = $runs[0]
         $receipt = Get-Content -LiteralPath (Join-Path $run.FullName 'metadata.json') -Raw | ConvertFrom-Json
         if ($receipt.status -ne 'succeeded') { throw " ERROR - Incomplete run: $label" }
-        $dll = Get-InstalledOpenCVFile $builds[$generator] 'opencv_world4100.dll'
+        $dll = Get-InstalledOpenCVFile $caseBuild 'opencv_world4100.dll'
         if ($ClServerStudy) {
             $proof = Get-Content -LiteralPath (Join-Path $run.FullName 'native-output.json') -Raw | ConvertFrom-Json
-            $library = Get-InstalledOpenCVFile $builds.MSBuild 'opencv_world4100.lib'
+            $library = Get-InstalledOpenCVFile $caseBuild 'opencv_world4100.lib'
             foreach ($binding in @(@($dll.FullName, 'bin/Release/opencv_world4100.dll'),
                                    @($library.FullName, 'lib/Release/opencv_world4100.lib'))) {
                 if ((Get-FileHash -LiteralPath $binding[0]).Hash.ToLowerInvariant() -ne
                     $proof.binaries.($binding[1])) { throw ' ERROR - Direct install changed retained native outputs.' }
             }
             $smokeArguments = "-NoProfile -File `"$(Join-Path $harness 'tests\smoke_opencv.ps1')`" -Root `"$source`" -Generator MSBuild -Toolchain MSVC2026"
+            if ($CombinedPch) { $smokeArguments += " -BuildDirectory `"$caseBuild`"" }
             $smoke = [BuildAccounting]::RunOwned($shell, $smokeArguments, $harness, (Join-Path $run.FullName 'native-smoke.log'))
             if ($smoke.ExitCode) { throw ' ERROR - Untimed owned native smoke failed.' }
             @{
@@ -173,7 +203,7 @@ try {
         }
         $study.runs += @{
             label = $label; generator = $generator; warmup = $label.StartsWith('warmup_')
-            configuration = if ($label -match 'original') { 'original' } elseif ($ClServerStudy) { 'server' } elseif ($label -match 'shared') { 'shared' } else { 'ninja' }
+            configuration = if ($ClServerStudy) { $configuration } elseif ($label -match 'original') { 'original' } elseif ($label -match 'shared') { 'shared' } else { 'ninja' }
             directory = $run.Name; build_seconds = $receipt.build_seconds
         }
         $study | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsDir 'study.json')

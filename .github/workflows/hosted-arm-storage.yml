@@ -1,4 +1,4 @@
-name: Native MSBuild shared CL-server paired qualification
+name: Native MSBuild combined stdlib-PCH paired qualification
 
 on:
   workflow_dispatch:
@@ -7,12 +7,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: msbuild-clserver-paired-${{ github.ref }}
+  group: msbuild-combined-pch-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   windows:
-    name: Windows Arm MSVC MSBuild original versus shared CL-server
+    name: Windows Arm original versus shared CL-server plus stdlib PCH
     runs-on: windows-11-arm
     timeout-minutes: 120
     steps:
@@ -31,18 +31,20 @@ jobs:
             if ($LASTEXITCODE) { throw 'Smoke failure-evidence tests failed.' }
             python -m unittest discover -s tests -p 'test_msbuild_clserver*.py'
             if ($LASTEXITCODE) { throw 'MSBuild CL-server guards failed.' }
+            python -m unittest discover -s tests -p 'test_msbuild_pch*.py'
+            if ($LASTEXITCODE) { throw 'MSBuild PCH guards failed.' }
             .\tests\test_owned_build.ps1
-            .\ci\Prepare-QualifiedGeneratorWorkload.ps1 -MSBuildOnly
+            .\ci\Prepare-QualifiedGeneratorWorkload.ps1 -MSBuildOnly -CombinedPch
           } catch {
             New-Item -ItemType Directory -Force evidence | Out-Null
             $_ | Out-String | Set-Content evidence\preparation-failure.log
             throw
           }
-      - name: Run same-VM balanced original/server pair
+      - name: Run direct balanced original/combined pair
         shell: pwsh
         run: |
           try {
-            .\ci\Run-MSBuildClServerStudy.ps1 -ResultsDir "$env:GITHUB_WORKSPACE\evidence\builds"
+            .\ci\Run-MSBuildCombinedPchStudy.ps1 -ResultsDir "$env:GITHUB_WORKSPACE\evidence\builds"
           } catch {
             $_ | Out-String | Set-Content evidence\study-failure.log
             throw
@@ -51,7 +53,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-msbuild-clserver-text
+          name: windows-msbuild-combined-pch-text
           path: |
             evidence/**/*.json
             evidence/**/*.log

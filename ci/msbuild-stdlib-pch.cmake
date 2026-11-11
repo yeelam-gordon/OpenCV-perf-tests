@@ -1,0 +1,23 @@
+if(NOT CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+  return()
+endif()
+include_guard(GLOBAL)
+
+function(opencv_msbuild_stdlib_pch)
+  if(NOT MSVC OR NOT CMAKE_GENERATOR STREQUAL "Visual Studio 18 2026")
+    message(FATAL_ERROR "The combined PCH experiment requires native MSVC/Visual Studio")
+  endif()
+  get_target_property(kind opencv_world TYPE)
+  if(NOT kind STREQUAL "SHARED_LIBRARY")
+    message(FATAL_ERROR "The combined PCH experiment requires shared opencv_world")
+  endif()
+  if(ENABLE_PRECOMPILED_HEADERS)
+    message(FATAL_ERROR "Legacy world PCH must remain disabled")
+  endif()
+  foreach(header IN ITEMS vector algorithm string memory utility limits)
+    target_precompile_headers(opencv_world PRIVATE
+      "$<$<COMPILE_LANGUAGE:CXX>:<${header}$<ANGLE-R>>")
+  endforeach()
+endfunction()
+
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL opencv_msbuild_stdlib_pch)

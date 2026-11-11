@@ -14,12 +14,16 @@ Those are not denominators or forecasts for this new direct combined pair.
 ## Manual bounded launch contract
 
 Repository `yeelam-gordon/OpenCV-perf-tests`, experiment ref
-`perf/msbuild-clserver-pch-ci`, exact base
-`cc585f6abe4cefd227a04a0df29ab472d2a2e2d0`. Reuse registered workflow
+`perf/msbuild-pch-nested-repair`, exact repair base
+`650ae9a8a37d6d5d443e1729eb5c427fa4543048`. Reuse registered workflow
 **412734614**, `.github/workflows/hosted-arm-storage.yml`, manual dispatch on
 the reviewed new ref only. No settings, default-branch or capacity change and
 no automatic retry. Exactly Windows `windows-11-arm` / 120 minutes and Mac
 `macos-15` / 60 minutes.
+
+Historical combined ref `perf/msbuild-clserver-pch-ci` at that base produced
+run 43087870068; Windows failed metadata planning before warmups or scores.
+Its failed tree, artifact and log remain historical evidence, not a repair run.
 
 Windows excludes two warmups (original/combined), then scores
 original/combined/combined/original: **six total builds, not three profiles
@@ -77,6 +81,10 @@ without a macro allowlist or flag homogenization. Actual producer semantics
 are bound to that original base command receipt; actual consumer flags remain
 bound per source/target. Source IDs, output bindings, tool/SDK/features and
 normalized compiler contexts must agree across profiles.
+Consumer objects may be nested below canonical world `IntDir` for CMake
+basename collisions. Containment never replaces exact original source/target
+`ObjectFileName` parity. The producer retains its exact native root object
+binding; outside/escaping objects or changed bindings fail.
 
 ## Reused clock, lifecycle and evidence
 

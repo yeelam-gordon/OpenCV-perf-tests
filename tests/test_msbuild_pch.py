@@ -103,6 +103,40 @@ class CombinedGuards(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "original native WORLD base"):
             self.partition(combined)
 
+    def test_nested_parallel_collision_outputs_keep_exact_source_target_binding(self):
+        combined = self.units()
+        directory = Path(combined[-1]["output"]).parent
+        for unit, name in zip(combined, ("parallel.cpp", "parallel/parallel.cpp")):
+            unit["file"] = str(self.source / "modules/core/src" / name)
+            unit["identity"] = "modules/core/src/" + name
+            unit["output"] = str(directory / "__/core/src" / (name + ".obj"))
+        original = copy.deepcopy(combined[:-1])
+        for unit in original:
+            unit["context"]["PrecompiledHeader"] = "NotUsing"
+            unit["context"]["ForcedIncludeFiles"] = ""
+            unit["pch"]["PrecompiledHeader"] = "NotUsing"
+        sources, _ = self.partition(combined)
+        pch.paired_units(original, sources, self.source, self.build, self.build)
+        for output in (directory.parent / "outside.obj", self.build / "wrong-root/u.obj",
+                       directory / ".." / "escape.obj"):
+            bad = copy.deepcopy(combined)
+            bad[0]["output"] = str(output)
+            with self.assertRaisesRegex(ValueError, "escapes canonical"):
+                self.partition(bad)
+        bad = copy.deepcopy(combined)
+        bad[0]["output"] = str(directory / "__/core/src/wrong-binding.obj")
+        sources, _ = self.partition(bad)
+        with self.assertRaisesRegex(ValueError, "Per-source/target context or output drift"):
+            pch.paired_units(original, sources, self.source, self.build, self.build)
+        bad = copy.deepcopy(combined)
+        bad[-1]["output"] = str(directory / "nested/cmake_pch.obj")
+        with self.assertRaisesRegex(ValueError, "native IntDir"):
+            self.partition(bad)
+        bad = copy.deepcopy(combined)
+        bad[0]["project"] = str(self.build / "modules/core/wrong.vcxproj")
+        with self.assertRaisesRegex(ValueError, "world CXX"):
+            self.partition(bad)
+
     def test_no_pch_leak_to_static_object_C_or_wrong_forced_include(self):
         units = self.units()
         units[0]["project"] = str(self.build / "modules/core/dispatched.vcxproj")

@@ -103,8 +103,11 @@ def partition(units, source, build, world_base, expected_consumers=513):
         if Path(unit["project"]).resolve() != project.resolve() or Path(unit["file"]).suffix.lower() not in (".cpp", ".cxx", ".cc"):
             raise ValueError("PCH is restricted to world CXX")
         expected = "create" if unit in created else "use"
-        if mode != expected or Path(unit["output"]).parent != directory:
+        output = Path(unit["output"]).resolve()
+        if mode != expected or (unit in created and output.parent != directory):
             raise ValueError("Wrong producer/consumer native IntDir")
+        if unit in consumers and (output == directory or not output.is_relative_to(directory)):
+            raise ValueError("Consumer object escapes canonical world native IntDir")
         for field, value in (("PrecompiledHeaderFile", wrapper),
                              ("PrecompiledHeaderOutputFile", artifacts[0])):
             if path(unit["pch"][field], project) != value:

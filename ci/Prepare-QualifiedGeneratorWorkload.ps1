@@ -1,4 +1,5 @@
 #Requires -Version 7.0
+param([switch]$DlsSource)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = Split-Path $PSScriptRoot
@@ -49,10 +50,12 @@ $profile = [ordered]@{
 $profile | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $repo 'toolchains\vs2026.json')
 $profile | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'observed-tools.json')
 $env:PATH = "$(Split-Path $ninja);$env:PATH"
+if ($env:GITHUB_PATH) { Split-Path $ninja | Add-Content -LiteralPath $env:GITHUB_PATH }
 $source = Join-Path $env:RUNNER_TEMP 'opencv-qualified-source'
 if (Test-Path -LiteralPath $source) { throw ' ERROR - Isolated source directory already exists.' }
 foreach ($generator in @('MSBuild', 'Ninja')) {
-    $options = if ($generator -eq 'Ninja') { @{ InitialCache = (Join-Path $PSScriptRoot 'ninja-dispatch-targets.cmake') } } else { @{} }
+    $cacheName = if ($DlsSource) { 'dls-ninja-dispatch-targets.cmake' } else { 'ninja-dispatch-targets.cmake' }
+    $options = if ($generator -eq 'Ninja') { @{ InitialCache = (Join-Path $PSScriptRoot $cacheName) } } else { @{} }
     & (Join-Path $repo 'scripts\setup.ps1') -Root $source -Generator $generator `
         -Toolchain MSVC2026 -CMake $cmake @options
     $build = Get-BuildDirectory $source $generator 'MSVC2026'
@@ -60,10 +63,28 @@ foreach ($generator in @('MSBuild', 'Ninja')) {
 }
 $msbuildDir = Get-BuildDirectory $source 'MSBuild' 'MSVC2026'
 $ninjaDir = Get-BuildDirectory $source 'Ninja' 'MSVC2026'
-foreach ($name in @('cvconfig.h', 'opencv2\opencv_modules.hpp')) {
+if ($DlsSource) {
+    if ([Environment]::ProcessorCount -ne 4) { throw ' ERROR - This experiment requires the observed four-job Windows host.' }
+    $candidate = Join-Path $env:RUNNER_TEMP 'opencv-dls-table'
+    $candidateHarness = Join-Path $env:RUNNER_TEMP 'opencv-dls-harness'
+    & $python (Join-Path $PSScriptRoot 'prepare-dls-source.py') --base $source `
+        --candidate $candidate --harness $repo --candidate-harness $candidateHarness `
+        --receipt (Join-Path $evidence 'source-variant.json')
+    if ($LASTEXITCODE) { throw ' ERROR - Public source variant preparation failed.' }
+    & (Join-Path $candidateHarness 'scripts\setup.ps1') -Root $candidate -Generator Ninja `
+        -Toolchain MSVC2026 -CMake $cmake -InitialCache (Join-Path $PSScriptRoot 'dls-ninja-dispatch-targets.cmake')
+    if (-not (Test-Path -LiteralPath (Join-Path (Get-BuildDirectory $candidate 'Ninja' 'MSVC2026') 'benchmark-setup.json'))) {
+        throw ' ERROR - Candidate native setup receipt missing.'
+    }
+}
+foreach ($name in @('cvconfig.h', 'opencv2\opencv_modules.hpp', 'cv_cpu_config.h')) {
     if ((Get-FileHash -LiteralPath (Join-Path $msbuildDir $name)).Hash -ne
         (Get-FileHash -LiteralPath (Join-Path $ninjaDir $name)).Hash) {
         throw ' ERROR - Generator feature headers differ before timing.'
+    }
+    if ($DlsSource -and (Get-FileHash -LiteralPath (Join-Path $ninjaDir $name)).Hash -ne
+        (Get-FileHash -LiteralPath (Join-Path (Get-BuildDirectory $candidate 'Ninja' 'MSVC2026') $name)).Hash) {
+        throw ' ERROR - Source-variant feature/CPU headers differ before timing.'
     }
 }
 @{

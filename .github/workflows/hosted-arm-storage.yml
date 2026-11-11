@@ -1,4 +1,4 @@
-name: Qualified native generator comparison
+name: DLS source-table matched Arm experiment
 
 on:
   workflow_dispatch:
@@ -7,12 +7,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: qualified-native-generator-comparison
+  group: dls-source-table-comparison
   cancel-in-progress: false
 
 jobs:
   windows:
-    name: Windows Arm original/shared/aligned-Ninja
+    name: Windows Arm original/aligned-Ninja/source-table
     runs-on: windows-11-arm
     timeout-minutes: 120
     steps:
@@ -24,52 +24,63 @@ jobs:
         env:
           HOSTING: ${{ runner.environment }}
         run: |
-          .\tests\test_native_generator_selection.ps1
-          .\tests\test_generator_failure_cleanup.ps1
-          python .\tests\test_generator_smoke_evidence.py
-          if ($LASTEXITCODE) { throw 'Smoke failure-evidence tests failed.' }
-          .\ci\Prepare-QualifiedGeneratorWorkload.ps1
-      - name: Run same-VM balanced original/shared/aligned-Ninja series
+          try {
+            .\tests\test_native_generator_selection.ps1
+            .\tests\test_generator_failure_cleanup.ps1
+            python .\tests\test_generator_smoke_evidence.py
+            if ($LASTEXITCODE) { throw 'Smoke failure-evidence tests failed.' }
+            python -m unittest discover -s tests -p 'test_dls_source*.py'
+            if ($LASTEXITCODE) { throw 'DLS source guard tests failed.' }
+            .\ci\Prepare-QualifiedGeneratorWorkload.ps1 -DlsSource
+          } catch {
+            New-Item -ItemType Directory -Force evidence | Out-Null
+            $_ | Out-String | Set-Content evidence\preparation-failure.log
+            throw
+          }
+      - name: Run same-VM balanced original/current/table series
         shell: pwsh
-        run: .\ci\Run-QualifiedGeneratorStudy.ps1 -ResultsDir "$env:GITHUB_WORKSPACE\evidence\builds" -IncludeOriginal
+        run: .\ci\Run-DlsSourceStudy.ps1 -ResultsDir "$env:GITHUB_WORKSPACE\evidence\builds"
       - name: Retain text evidence including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-qualified-generators
+          name: windows-dls-source-text
           path: |
             evidence/**/*.json
             evidence/**/*.log
             evidence/**/*.txt
             evidence/**/*.csv
-            evidence/**/*.trace
             evidence/**/*.hpp
             evidence/**/*.h
             evidence/**/*.cmake
             evidence/**/*.ninja
           if-no-files-found: error
   macos:
-    name: macOS Arm matched-definition reference
+    name: macOS Arm matched-definition source comparison
     runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Run matched definitions with excluded warmup
+      - name: Test source preparation guards
         shell: bash
-        run: bash ci/run-macos-screen.sh matched
+        run: |
+          mkdir -p evidence
+          python3 -m unittest discover -s tests -p 'test_dls_source*.py' > evidence/preflight.log 2>&1
+      - name: Run matched definitions with balanced excluded warmups
+        shell: bash
+        run: bash ci/run-macos-dls-source.sh
       - name: Retain text evidence including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: macos-qualified-reference
+          name: macos-dls-source-text
           path: |
             evidence/**/*.json
             evidence/**/*.log
             evidence/**/*.txt
             evidence/**/*.csv
-            evidence/**/*.trace
             evidence/**/*.hpp
             evidence/**/*.h
             evidence/**/*.cmake

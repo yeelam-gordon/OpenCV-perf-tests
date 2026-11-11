@@ -1,0 +1,10 @@
+{
+  "base_commit": "71d3237a093b60a27601c20e9ee6c3e52154e8b1",
+  "base_tree": "1f7a0c7fcc20571cab11da4c86ae1e796979df5b",
+  "path": "modules/calib3d/src/dls.cpp",
+  "base_blob": "f0b9d850e9879aa21dc87f899e605acad7801bc7",
+  "variant_blob": "417c27fe9266be8d406a532b9d9ffc00651fddba",
+  "variant_tree": "03cd2c96b1ee24eafcf0587114e0ee041c517cc4",
+  "patch": "patches/dls-source-table.patch",
+  "patch_sha256": "d05ffcd0622647fdcfa8ef2e36aa2b62a1e148d0d22e37267ba3dbb57b38f7e3"
+}

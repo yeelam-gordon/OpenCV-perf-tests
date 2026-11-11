@@ -1,4 +1,7 @@
 * text=auto
 *.ps1 text eol=crlf
+ci/run-macos-dls-source.sh text eol=lf
+# The manifest hashes the literal patch bytes, on both runner operating systems.
+ci/patches/*.patch -text -whitespace
 # Preserve generated log whitespace as benchmark evidence.
 results/** -whitespace

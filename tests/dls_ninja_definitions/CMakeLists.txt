@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.20)
+project(DlsAlignment NONE)
+include("${CMAKE_CURRENT_LIST_DIR}/../../ci/dls-ninja-definitions.cmake")
+get_directory_property(definitions COMPILE_DEFINITIONS)
+add_library(shared SHARED IMPORTED)
+add_library(object OBJECT IMPORTED)
+add_library(static STATIC IMPORTED)
+foreach(target IN ITEMS shared object static)
+  file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${target}.txt"
+       CONTENT "${definitions}" TARGET ${target})
+endforeach()

@@ -3,7 +3,7 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import shlex
 import shutil
@@ -47,7 +47,7 @@ def compilation_entries(commands, generator):
             if len(marker) != 2:
                 raise ValueError("Malformed MSBuild command identity")
             for file in marker[1].split("|"):
-                entries.append({"file": file, "command": command})
+                entries.append({"file": file, "command": command, "tlog": marker[0]})
     else:
         for entry in commands:
             if generator == "Ninja" and Path(entry.get("output", "")).suffix.lower() not in (".obj", ".o"):
@@ -77,17 +77,21 @@ def units(commands, source, build, generator):
     return unit_manifest(compilation_entries(commands, generator), source, build, generator)
 
 
+def compiled_output(entry, generator):
+    if generator == "Make":
+        tokens = shlex.split(entry["command"])
+        if "-o" not in tokens:
+            raise ValueError("Missing Make compiler output")
+        name = tokens[tokens.index("-o") + 1]
+    else:
+        name = entry["output"]
+    return Path(entry["directory"]) / name
+
+
 def compiled_outputs(entries, generator):
     outputs = []
     for entry in entries:
-        if generator == "Make":
-            tokens = shlex.split(entry["command"])
-            if "-o" not in tokens:
-                raise ValueError("Missing Make compiler output")
-            name = tokens[tokens.index("-o") + 1]
-        else:
-            name = entry["output"]
-        output = Path(entry["directory"]) / name
+        output = compiled_output(entry, generator)
         if not output.is_file():
             raise ValueError(f"Compile-database unit was not actually built: {entry['file']}")
         outputs.append(output)
@@ -96,17 +100,59 @@ def compiled_outputs(entries, generator):
     return outputs
 
 
+def dls_object(entries, source, build, generator):
+    bindings = []
+    for entry in entries:
+        file = Path(entry["file"])
+        if not file.is_absolute():
+            file = Path(entry["directory"]) / file
+        if identity(file, source, build) == SOURCE:
+            bindings.append(entry)
+    if len(bindings) != 1:
+        raise ValueError(f"Expected exactly one DLS source binding; found {len(bindings)}")
+    entry = bindings[0]
+    if generator == "MSBuild":
+        tlog = PureWindowsPath(entry["tlog"])
+        expected = PureWindowsPath("modules/world/opencv_world.dir/Release")
+        if tlog != expected / "opencv_world.tlog/CL.command.1.tlog":
+            raise ValueError("DLS source binding is not the MSBuild world Release target")
+        options = re.findall(r'(?:^|\s)/Fo(?:"([^"]+)"|(\S+))', entry["command"], re.I)
+        if len(options) != 1:
+            raise ValueError("Expected exactly one MSBuild DLS /Fo output binding")
+        name = options[0][0] or options[0][1]
+        output = PureWindowsPath(name)
+        if not output.is_absolute():
+            output = PureWindowsPath(str(build)) / "modules/world" / output
+        directory = PureWindowsPath(str(build)) / expected
+        if name.endswith(("\\", "/")):
+            output /= PureWindowsPath(SOURCE).stem + ".obj"
+        if output != directory / "dls.obj":
+            raise ValueError("MSBuild DLS /Fo does not match its world Release source binding")
+        path = build / "modules/world/opencv_world.dir/Release/dls.obj"
+    else:
+        path = compiled_output(entry, generator).resolve()
+        try:
+            relative = path.relative_to(build.resolve())
+        except ValueError:
+            raise ValueError("DLS object output is outside the configured build") from None
+        prefix = ("modules", "world", "cmakefiles", "opencv_world.dir")
+        basename = "dls.cpp.obj" if generator == "Ninja" else "dls.cpp.o"
+        if tuple(part.lower() for part in relative.parts[:4]) != prefix or path.name.lower() != basename:
+            raise ValueError("DLS source binding is not the configured world object target")
+    if not path.is_file():
+        raise ValueError(f"Source-bound DLS object is missing: {path}")
+    return path
+
+
 def capture(source, build, run, generator):
     commands = load(run / "commands.json")
     entries = compilation_entries(commands, generator)
     records, world = unit_manifest(entries, source, build, generator)
-    objects = list(build.glob("**/dls.cpp.obj")) + list(build.glob("**/dls.cpp.o"))
-    if len(objects) != 1:
-        raise ValueError(f"Expected exactly one actual DLS object; found {len(objects)}")
-    target = run / "runtime-binaries" / objects[0].name
+    object_file = dls_object(entries, source, build, generator)
+    target = run / "runtime-binaries" / object_file.name
     target.parent.mkdir(exist_ok=True)
-    shutil.copyfile(objects[0], target)
-    if sha(target) != sha(objects[0]):
+    shutil.copyfile(object_file, target)
+    if sha(target) != sha(object_file):
         raise ValueError("DLS object copy mismatch")
     headers = {}
     for name in HEADERS:
@@ -128,6 +174,8 @@ def capture(source, build, run, generator):
         "source_blob": git("rev-parse", f"HEAD:{SOURCE}"),
         "source_raw_sha256": sha(source / SOURCE), "dls_object_sha256": sha(target),
         "dls_object_bytes": target.stat().st_size,
+        "dls_object_binding": {"generator": generator, "source": SOURCE,
+                               "object_build_relative": str(object_file.resolve().relative_to(build.resolve()))},
         "proof_scope": "Object copied and hashed after timer locally. Text-only cloud upload is a receipt, not retained-binary proof.",
     }
     if generator in ("Make", "Ninja"):

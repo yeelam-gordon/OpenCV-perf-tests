@@ -1,4 +1,4 @@
-name: DLS source-table matched Arm experiment
+name: DLS source-table two-platform capture repair
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: dls-source-table-comparison
+  group: dls-source-table-two-platform-capture-repair
   cancel-in-progress: false
 
 jobs:

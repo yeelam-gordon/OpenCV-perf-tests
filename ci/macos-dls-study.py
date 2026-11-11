@@ -3,25 +3,40 @@
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
 BASE = "71d3237a093b60a27601c20e9ee6c3e52154e8b1"
 ORDER = ["warmup_baseline", "warmup_table", "baseline_1", "table_1", "table_2", "baseline_2"]
+STABLE_MAKE_PATTERNS = (
+    "**/Makefile", "**/Makefile2", "**/build.make", "**/flags.make", "**/link.txt",
+    "**/Makefile.cmake", "**/DependInfo.cmake", "**/cmake_clean*.cmake",
+    "**/cmake_install.cmake", "CMakeFiles/*/CMake*Compiler.cmake",
+    "CMakeFiles/*/CMakeSystem.cmake",
+)
+CONFIGURED_TOOL = re.compile(
+    r"^CMAKE_(?:COMMAND|MAKE_PROGRAM|C_COMPILER|CXX_COMPILER|ASM_COMPILER|"
+    r"OBJC_COMPILER|OBJCXX_COMPILER|AR|RANLIB|LINKER):[^=]+=(.+)$", re.M
+)
 
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def frozen(root):
+def frozen(root, expected=None):
     files = []
     for variant in ("base", "table"):
         build = root / (variant + "-build")
-        files.extend(build.glob("**/Makefile"))
-        files.extend(build.glob("**/*.make"))
-        files.extend(build.glob("**/flags.make"))
-        files += [build / "CMakeCache.txt", build / "compile_commands.json"]
+        for pattern in STABLE_MAKE_PATTERNS:
+            files.extend(build.glob(pattern))
+        cache = build / "CMakeCache.txt"
+        files += [cache, build / "compile_commands.json", build / "cvconfig.h",
+                  build / "opencv2/opencv_modules.hpp", build / "cv_cpu_config.h"]
+        if cache.is_file():
+            files.extend(Path(name) for name in CONFIGURED_TOOL.findall(cache.read_text(encoding="utf-8-sig"))
+                         if name and not name.endswith("-NOTFOUND"))
     harness = Path(__file__).resolve().parents[1]
     for owner in (harness, root / "table-harness"):
         files += [owner / "benchmark.json"]
@@ -30,7 +45,35 @@ def frozen(root):
                          if file.is_file() and "__pycache__" not in file.parts)
     files.extend(file for file in (harness / "ci").rglob("*")
                  if file.is_file() and "__pycache__" not in file.parts)
-    return {str(file): sha(file) for file in files}
+    # Keep prior paths in the snapshot so removals remain diagnosable.
+    files.extend(Path(name) for name in (expected or {}))
+    return {str(file): sha(file) if file.is_file() else None for file in sorted(set(files))}
+
+
+def assert_frozen(expected, current, evidence, action):
+    changed = {
+        name: {"expected_sha256": digest, "actual_sha256": current[name]}
+        for name, digest in expected.items()
+        if current.get(name) is not None and current[name] != digest
+    }
+    added = {
+        name: {"actual_sha256": digest} for name, digest in current.items()
+        if name not in expected and digest is not None
+    }
+    missing = {
+        name: {"expected_sha256": expected.get(name)} for name in expected.keys() | current.keys()
+        if current.get(name) is None
+    }
+    if changed or added or missing:
+        receipt = evidence / "frozen-input-drift.json"
+        receipt.write_text(json.dumps({
+            "action": action, "changed": changed, "added": added, "missing": missing,
+            "scope": "Stable recipes/configuration/headers/tools/harness; dependency/progress outputs are not frozen.",
+        }, indent=2, sort_keys=True), encoding="utf-8")
+        raise ValueError(
+            f"Frozen Mac workload inputs changed: {len(changed)} changed, "
+            f"{len(added)} added, {len(missing)} missing; see {receipt.name}"
+        )
 
 
 def main():
@@ -62,8 +105,7 @@ def main():
                                        check=True, text=True, capture_output=True).stdout.strip()
                 if value != expected:
                     raise ValueError(f"Source pin/clean guard failed: {variant}")
-        if frozen(root) != study["frozen_sha256"]:
-            raise ValueError("Frozen Mac workload inputs changed")
+        assert_frozen(study["frozen_sha256"], frozen(root, study["frozen_sha256"]), evidence, action)
         if action.startswith("record:"):
             label = action.split(":", 1)[1]
             if label != ORDER[len(study["runs"])]:

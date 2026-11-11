@@ -1,8 +1,10 @@
 # Hosted Arm build/storage screen
 
-**Branch note:** the current workflow on `perf/dls-source-ci` is the
-[DLS source-table experiment](DLS_SOURCE_EXPERIMENT.md), prepared for parent
-audit only. The prior [qualified native generators](QUALIFIED_GENERATORS.md)
+**Branch note:** `perf/dls-source-ci-repair` prepares the
+[two-platform capture repair](DLS_SOURCE_EXPERIMENT.md) for parent audit.
+It retains the original Windows/Mac jobs and bounds and supersedes the
+unreleased Mac-only repair. The prior
+[qualified native generators](QUALIFIED_GENERATORS.md)
 and the storage-screen description below are historical on this branch;
 neither storage crossover nor a workflow dispatch is authorized by preparation.
 

@@ -5,6 +5,58 @@ It does not establish a performance win, Windows/Mac parity, numerical
 equivalence, Debug qualification, or a recommendation to adopt the candidate.
 The benchmark remains OpenCV 4.10.0 with the existing 23 definitions.
 
+## Two-platform capture repair
+
+`perf/dls-source-ci-repair` repairs evidence bookkeeping on the published
+experiment, not the OpenCV source candidate or workload. It supersedes the
+unreleased Mac-only repair. The registered workflow path retains exactly the
+original two jobs: Windows `windows-11-arm` at 120 minutes and Mac `macos-15`
+at 60 minutes, with independent concurrency group
+`dls-source-table-two-platform-capture-repair`. There are no extra jobs, dispatch
+inputs or automatic retries. Parent review and explicit GO are required before
+committing, pushing or dispatching this branch.
+
+Both original jobs completed their first build warmup but failed subsequent
+evidence bookkeeping, accepting zero observations. Neither failed warmup is a
+score or an observation imported into the repaired batch. Fresh Windows and
+Mac studies retain all original excluded warmups and balanced scored orders.
+Source patch/tree, all 23 definitions, tools/compiler/profile, features,
+language accounting and timer boundaries are unchanged; no required dependency
+or compile work is moved outside the timer.
+
+### Stable Mac inputs versus mutable build outputs
+
+| Classification | Files or guard |
+|---|---|
+| Stable Make recipes and dispatch | `Makefile`, `Makefile2`, `build.make`, `flags.make`, `link.txt`, generated clean/install recipes |
+| Stable regeneration/compiler metadata | `Makefile.cmake`, `DependInfo.cmake`, CMake compiler/system description files |
+| Stable configuration and source inventory | `CMakeCache.txt`, `compile_commands.json` |
+| Stable feature/CPU headers | `cvconfig.h`, `opencv2/opencv_modules.hpp`, `cv_cpu_config.h` |
+| Tool identity | Configured CMake, Make, C/C++/Objective-C/C++/ASM compiler, archiver/ranlib/linker paths and file hashes |
+| Source and harness identity | Existing source Git pin/cleanliness guards plus benchmark/scripts/tests/toolchain/CI file hashing |
+| Mutable outputs, not frozen | `compiler_depend.make`, `depend.make`, `progress.make`, dependency caches, progress markers and object/output files |
+
+Stable-input changes still fail closed. `frozen-input-drift.json` retains the
+action and exact **changed** expected/actual SHA256 pairs, **added** hashes and
+**missing** expected hashes, including deleted recipes or headers.
+
+### Source-bound DLS object capture
+
+Capture requires exactly one compiler entry for the canonical
+`modules/calib3d/src/dls.cpp`, not an object found by recursive basename search.
+For MSBuild, its world Release command-tlog identity and `/Fo` must agree:
+a directory `/Fo"OPENCV_WORLD.DIR\RELEASE\\"` maps the source basename to
+`modules/world/opencv_world.dir/Release/dls.obj`; an explicit matching
+`dls.obj` output is also accepted. Unrelated projects, prototype objects,
+missing/ambiguous source bindings, conflicting output flags and missing
+objects fail closed.
+
+Ninja and Make resolve the matching compile-database entry's output, retaining
+their existing `dls.cpp.obj` and `dls.cpp.o` names under the configured world
+target. The generator/source/build-relative object binding is retained in the
+hash receipt. This does not change compiled work, command options, object
+bytes or the rule that uploaded hashes are not retained-binary proof.
+
 ## Public source identity
 
 `dls-source-variant.json` pins the public upstream base, the literal SHA256 of
@@ -108,7 +160,7 @@ account is `yeelam-gordon`, inspect the exact public file allowlist and commit,
 then (only once release is authorized) push this independent branch and launch:
 
 ```
-gh workflow run 412734614 --repo yeelam-gordon/OpenCV-perf-tests --ref perf/dls-source-ci
+gh workflow run 412734614 --repo yeelam-gordon/OpenCV-perf-tests --ref perf/dls-source-ci-repair
 ```
 
 The workflow is already registered through the existing default-branch path;

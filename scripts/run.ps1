@@ -12,7 +12,9 @@ param(
     [switch]$BinaryLog,
     [ValidateSet('Default', 'MultiToolTask')][string]$MSBuildScheduler = 'Default',
     [ValidateRange(1, 256)][int]$CompilerJobs = 12,
-    [switch]$SharedCompilerLimit
+    [switch]$SharedCompilerLimit,
+    [switch]$EnableClServerMode,
+    [string]$MSBuildStudyPlan = ''
 )
 . "$PSScriptRoot\common.ps1"
 Assert-NoPendingToolchainRestart
@@ -34,6 +36,24 @@ if ($PSBoundParameters.ContainsKey('CompilerJobs') -and $MSBuildScheduler -eq 'D
 if ($SharedCompilerLimit -and $MSBuildScheduler -ne 'MultiToolTask') {
     throw ' ERROR - SharedCompilerLimit requires the MultiToolTask scheduler.'
 }
+if ($EnableClServerMode -and (-not $SharedCompilerLimit -or $MSBuildScheduler -ne 'MultiToolTask')) {
+    throw ' ERROR - CL server requires the explicit shared MultiToolTask candidate.'
+}
+if ($MSBuildStudyPlan -and ($Generator -ne 'MSBuild' -or $Profile -or $MeasureCpu -or $BinaryLog)) {
+    throw ' ERROR - The paired MSBuild study uses owned wall timing without profiling.'
+}
+if ($EnableClServerMode -and -not $MSBuildStudyPlan) {
+    throw ' ERROR - CL server requires the paired owned-lifecycle plan.'
+}
+if ($MSBuildStudyPlan) {
+    if ($EnableClServerMode) {
+        if ($Parallel -ne 4 -or $CompilerJobs -ne 4) {
+            throw ' ERROR - The paired MSBuild study candidate requires budget4 settings.'
+        }
+    } elseif ($MSBuildScheduler -ne 'Default' -or $Parallel -ne 0 -or $SharedCompilerLimit) {
+        throw ' ERROR - The paired MSBuild study original must keep scheduling defaults.'
+    }
+}
 $schedulerArguments = @()
 if ($MSBuildScheduler -eq 'MultiToolTask') {
     $schedulerArguments = @('/p:MultiProcCL=true', "/p:MultiProcMaxCount=$CompilerJobs")
@@ -43,6 +63,7 @@ if ($MSBuildScheduler -eq 'MultiToolTask') {
         $schedulerArguments += @('/p:EnforceProcessCountAcrossBuilds=true', '/nr:false')
         if (-not $PSBoundParameters.ContainsKey('Label')) { $Label = 'msbuild_multitool_shared_experiment' }
     }
+    if ($EnableClServerMode) { $schedulerArguments += '/p:EnableClServerMode=true' }
 }
 Assert-Source $Root
 $buildDir = Get-BuildDirectory $Root $Generator $Toolchain
@@ -110,6 +131,7 @@ $metadata = [ordered]@{
     msbuild_scheduler = $MSBuildScheduler
     compiler_jobs = if ($MSBuildScheduler -ne 'Default') { $CompilerJobs } else { $null }
     shared_compiler_limit = [bool]$SharedCompilerLimit
+    enable_cl_server_mode = [bool]$EnableClServerMode
     setup = $receipt
     cpu = (Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors)
     memory_gib = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
@@ -130,6 +152,10 @@ if (Test-Path $sdkInstallationReceipt) {
 }
 $metadata | ConvertTo-Json -Depth 8 | Set-Content "$runDir\metadata.json"
 $lock = $null
+if ($MSBuildStudyPlan) {
+    . "$PSScriptRoot\owned_build.ps1"
+    if (-not ('BuildAccounting' -as [type])) { Add-Type -Path "$PSScriptRoot\BuildAccounting.cs" }
+}
 try {
     # Exclusive per-source lock prevents our MSBuild and Ninja experiments overlapping.
     $lock = [IO.File]::Open("$Root\.hobl-benchmark.lock", 'OpenOrCreate', 'ReadWrite', 'None')
@@ -138,6 +164,10 @@ try {
         $cleanArguments = @('--build', '.', '--target', 'clean', '--config', 'Release')
         if ($schedulerArguments.Count) { $cleanArguments += @('--') + $schedulerArguments }
         $clean = Invoke-Logged $cmakeExe $cleanArguments "$runDir\clean.log"
+        if ($MSBuildStudyPlan) {
+            & python "$PSScriptRoot\..\ci\msbuild-clserver-evidence.py" clean --source $Root --build $buildDir --run $runDir --plan $MSBuildStudyPlan
+            if ($LASTEXITCODE) { throw ' ERROR - Required native outputs remain before the build clock.' }
+        }
         if ($Generator -eq 'Ninja' -and (Test-Path "$buildDir\.ninja_log")) {
             # Ninja clean preserves historical log entries. Each run must have an isolated log.
             Remove-Item -LiteralPath "$buildDir\.ninja_log"
@@ -149,7 +179,11 @@ try {
         if ($BinaryLog) { $nativeArguments += "/bl:$runDir\build.binlog;ProjectImports=None" }
         if ($nativeArguments.Count) { $argsList += @('--') + $nativeArguments }
         $metadata['build_arguments'] = $argsList
-        if ($MeasureCpu) {
+        if ($MSBuildStudyPlan) {
+            $build = Invoke-OwnedBuild $cmakeExe $argsList $buildDir $runDir
+            & python "$PSScriptRoot\..\ci\msbuild-clserver-evidence.py" capture --source $Root --build $buildDir --run $runDir --plan $MSBuildStudyPlan
+            if ($LASTEXITCODE) { throw ' ERROR - Timed source/output proof failed before direct install.' }
+        } elseif ($MeasureCpu) {
             $accounting = Invoke-MeasuredBuild $cmakeExe $argsList $buildDir $runDir -Trace:$Trace
             $build = [math]::Round($accounting.WallSeconds, 4)
             $metadata['cpu_accounting'] = $accounting
@@ -161,7 +195,8 @@ try {
         if ($Generator -eq 'Ninja') { Copy-Item "$buildDir\.ninja_log" "$runDir\ninja_log.txt" }
         $installTarget = if ($Generator -eq 'MSBuild') { 'INSTALL' } else { 'install' }
         $installArguments = @('--build', '.', '--target', $installTarget, '--config', 'Release')
-        if ($schedulerArguments.Count) { $installArguments += @('--') + $schedulerArguments }
+        if ($MSBuildStudyPlan) { $installArguments = @('--install', '.', '--config', 'Release') }
+        elseif ($schedulerArguments.Count) { $installArguments += @('--') + $schedulerArguments }
         $install = Invoke-Logged $cmakeExe $installArguments "$runDir\install.log"
         $versionExe = Get-InstalledOpenCVFile $buildDir 'opencv_version.exe'
         Assert-NativeExecutable $versionExe.FullName $receipt.architecture

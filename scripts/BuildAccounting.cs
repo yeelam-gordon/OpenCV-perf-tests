@@ -24,6 +24,25 @@ public static class BuildAccounting
         public uint faults, totalProcesses, activeProcesses, terminatedProcesses;
         public ulong readOps, writeOps, otherOps, readBytes, writeBytes, otherBytes;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    struct BasicLimits
+    {
+        public long processTime, jobTime;
+        public uint flags;
+        public UIntPtr minimum, maximum;
+        public uint activeLimit;
+        public UIntPtr affinity;
+        public uint priority, scheduling;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct IoCounters { public ulong readOps, writeOps, otherOps, readBytes, writeBytes, otherBytes; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct ExtendedLimits
+    {
+        public BasicLimits basic;
+        public IoCounters io;
+        public UIntPtr processMemory, jobMemory, peakProcessMemory, peakJobMemory;
+    }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     static extern IntPtr CreateJobObject(IntPtr attributes, string name);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -42,6 +61,10 @@ public static class BuildAccounting
     static extern bool QueryInformationJobObject(IntPtr job, int type, out Accounting info, int length, IntPtr returned);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool TerminateProcess(IntPtr process, uint code);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetInformationJobObject(IntPtr job, int type, ref ExtendedLimits limits, int length);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool TerminateJobObject(IntPtr job, uint code);
     [DllImport("kernel32.dll")]
     static extern bool CloseHandle(IntPtr handle);
 
@@ -54,6 +77,16 @@ public static class BuildAccounting
     }
 
     public static Result Run(string executable, string arguments, string directory, string log)
+    {
+        return RunCore(executable, arguments, directory, log, false);
+    }
+
+    public static Result RunOwned(string executable, string arguments, string directory, string log)
+    {
+        return RunCore(executable, arguments, directory, log, true);
+    }
+
+    static Result RunCore(string executable, string arguments, string directory, string log, bool owned)
     {
         // cmd supplies the same combined stdout/stderr file without a pipe reader affecting timing.
         foreach (string value in new[] { executable, arguments, directory, log })
@@ -70,6 +103,13 @@ public static class BuildAccounting
         bool resumed = false;
         try
         {
+            if (owned)
+            {
+                var limits = new ExtendedLimits();
+                limits.basic.flags = 0x2000; // Kill only this invocation's descendants on job close.
+                if (!SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf<ExtendedLimits>()))
+                    throw new Win32Exception();
+            }
             var startup = new StartupInfo { cb = Marshal.SizeOf<StartupInfo>() };
             if (!CreateProcess(cmd, command, IntPtr.Zero, IntPtr.Zero, false, 0x08000004,
                 IntPtr.Zero, directory, ref startup, out process))
@@ -82,11 +122,12 @@ public static class BuildAccounting
             resumed = true;
             if (WaitForSingleObject(process.process, uint.MaxValue) != 0) throw new Win32Exception();
             watch.Stop();
+            string finishedAt = DateTimeOffset.Now.ToString("o");
             if (!GetExitCodeProcess(process.process, out uint exitCode)) throw new Win32Exception();
             // Build completion is the boundary; idle compiler servers can outlive their caller.
             if (!QueryInformationJobObject(job, 8, out Accounting accounting, Marshal.SizeOf<Accounting>(), IntPtr.Zero))
                 throw new Win32Exception();
-            result.FinishedAt = DateTimeOffset.Now.ToString("o");
+            result.FinishedAt = finishedAt;
             result.ExitCode = exitCode;
             result.WallSeconds = watch.Elapsed.TotalSeconds;
             result.UserSeconds = accounting.user / 10000000.0;
@@ -101,12 +142,38 @@ public static class BuildAccounting
         }
         finally
         {
-            // Only an unstarted process created by this call may be terminated on setup failure.
-            if (!resumed && process.process != IntPtr.Zero && !TerminateProcess(process.process, 1))
-                throw new Win32Exception();
-            if (process.thread != IntPtr.Zero) CloseHandle(process.thread);
-            if (process.process != IntPtr.Zero) CloseHandle(process.process);
-            CloseHandle(job);
+            if (owned && resumed)
+            {
+                // The build clock has stopped. Drain resident compiler servers before the next phase.
+                try
+                {
+                    if (!TerminateJobObject(job, 1)) throw new Win32Exception();
+                    bool drained = false;
+                    for (int attempt = 0; attempt < 100; attempt++)
+                    {
+                        if (!QueryInformationJobObject(job, 8, out Accounting active, Marshal.SizeOf<Accounting>(), IntPtr.Zero))
+                            throw new Win32Exception();
+                        if (active.activeProcesses == 0) { drained = true; break; }
+                        System.Threading.Thread.Sleep(100);
+                    }
+                    if (!drained) throw new InvalidOperationException("Owned build descendants did not drain.");
+                }
+                finally
+                {
+                    if (process.thread != IntPtr.Zero) CloseHandle(process.thread);
+                    if (process.process != IntPtr.Zero) CloseHandle(process.process);
+                    CloseHandle(job);
+                }
+            }
+            else
+            {
+                // Only an unstarted process created by this call may be terminated on setup failure.
+                if (!resumed && process.process != IntPtr.Zero && !TerminateProcess(process.process, 1))
+                    throw new Win32Exception();
+                if (process.thread != IntPtr.Zero) CloseHandle(process.thread);
+                if (process.process != IntPtr.Zero) CloseHandle(process.process);
+                CloseHandle(job);
+            }
         }
     }
 }

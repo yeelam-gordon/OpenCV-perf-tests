@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
+mode="${1:-dls}"
+test "$mode" = dls || test "$mode" = unchanged-reference
+study_options=()
+variants=(base table)
+order=(warmup_baseline warmup_table baseline_1 table_1 table_2 baseline_2)
+evidence_script=dls-source-evidence.py
+if [ "$mode" = unchanged-reference ]; then
+  study_options=(unchanged-reference)
+  variants=(base)
+  order=(warmup_baseline baseline_1 baseline_2)
+  evidence_script=msbuild-clserver-evidence.py
+fi
 test "$(uname -m)" = arm64
 test "${GITHUB_ACTIONS:-}" = true
 repo="$GITHUB_WORKSPACE"
 evidence="$repo/evidence"
-root="$RUNNER_TEMP/opencv-dls-study"
+root="$RUNNER_TEMP/opencv-$mode-study"
 mkdir -p "$evidence"
 test ! -e "$root"
 mkdir "$root"
@@ -16,7 +28,7 @@ finish() {
     status=1
   fi
   if [ "$status" -ne 0 ] && [ -f "$evidence/study.json" ]; then
-    python3 "$repo/ci/macos-dls-study.py" "failed:$status" "$root" "$evidence" "${jobs:-0}" || true
+    python3 "$repo/ci/macos-dls-study.py" "failed:$status" "$root" "$evidence" "${jobs:-0}" "${study_options[@]}" || true
   fi
   printf "%s\n" "$status" > "$evidence/script-exit-code.txt"
   exit "$status"
@@ -38,8 +50,10 @@ export PKG_CONFIG_PATH="$(brew --prefix ffmpeg@6)/lib/pkgconfig:${PKG_CONFIG_PAT
 pkg-config --modversion libavcodec > "$evidence/ffmpeg-version.txt"
 git clone --quiet --depth 1 --branch 4.10.0 https://github.com/opencv/opencv.git "$root/base"
 test "$(git -C "$root/base" rev-parse HEAD)" = 71d3237a093b60a27601c20e9ee6c3e52154e8b1
-python3 "$repo/ci/prepare-dls-source.py" --base "$root/base" --candidate "$root/table" \
-  --harness "$repo" --candidate-harness "$root/table-harness" --receipt "$evidence/source-variant.json"
+if [ "$mode" = dls ]; then
+  python3 "$repo/ci/prepare-dls-source.py" --base "$root/base" --candidate "$root/table" \
+    --harness "$repo" --candidate-harness "$root/table-harness" --receipt "$evidence/source-variant.json"
+fi
 flags=()
 while IFS= read -r flag; do flags+=("$flag"); done < <(
   python3 -c 'import json; d=json.load(open("benchmark.json")); assert len(d["cmake_flags"])==23; print("\n".join(d["cmake_flags"]))'
@@ -58,39 +72,52 @@ printf '%s\n' "${flags[@]}" > "$evidence/configure-definitions.txt"
   diskutil info /
   printf 'ImageOS=%s\nImageVersion=%s\n' "${ImageOS:-}" "${ImageVersion:-}"
 } > "$evidence/environment.txt"
-for variant in base table; do
+for variant in "${variants[@]}"; do
   "$cmake" -S "$root/$variant" -B "$root/$variant-build" -G "Unix Makefiles" \
     "${flags[@]}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON > "$evidence/$variant-configure.log" 2>&1
   cp "$root/$variant-build/CMakeCache.txt" "$evidence/$variant-CMakeCache.txt"
   cp "$root/$variant-build/CMakeFiles/4.4.4/CMakeCXXCompiler.cmake" "$evidence/$variant-CMakeCXXCompiler.cmake"
 done
 jobs="$(sysctl -n hw.ncpu)"
-python3 "$repo/ci/macos-dls-study.py" initialize "$root" "$evidence" "$jobs"
-for label in warmup_baseline warmup_table baseline_1 table_1 table_2 baseline_2; do
+python3 "$repo/ci/macos-dls-study.py" initialize "$root" "$evidence" "$jobs" "${study_options[@]}"
+for label in "${order[@]}"; do
   variant=base
   case "$label" in *table*) variant=table ;; esac
   build="$root/$variant-build"
   run="$evidence/$label"
   mkdir "$run"
-  python3 "$repo/ci/macos-dls-study.py" guard "$root" "$evidence" "$jobs"
+  python3 "$repo/ci/macos-dls-study.py" guard "$root" "$evidence" "$jobs" "${study_options[@]}"
   make -C "$build" clean > "$run/clean.log" 2>&1
+  if [ "$mode" = unchanged-reference ]; then
+    python3 "$repo/ci/$evidence_script" clean --source "$root/base" --build "$build" --run "$run" --generator Make
+  fi
   sleep 30
   (
     cd "$build"
     /usr/bin/time -p -o "$run/time.log" make -j"$jobs" > "$run/build.log" 2>&1
+    if [ "$mode" = unchanged-reference ]; then
+      cp "$build/compile_commands.json" "$run/commands.json"
+      python3 "$repo/ci/$evidence_script" capture --source "$root/base" --build "$build" --run "$run" --generator Make
+    fi
     test "$(./bin/opencv_version)" = 4.10.0
     file ./bin/opencv_version > "$run/output-architecture.txt"
     ./bin/opencv_version --verbose > "$run/opencv-build-info.txt"
   )
   cp "$build/compile_commands.json" "$run/commands.json"
-  python3 "$repo/ci/dls-source-evidence.py" capture --source "$root/$variant" --build "$build" \
-    --run "$run" --generator Make
+  if [ "$mode" = dls ]; then
+    python3 "$repo/ci/dls-source-evidence.py" capture --source "$root/$variant" --build "$build" \
+      --run "$run" --generator Make
+  fi
   "$cmake" --fresh -S "$repo/tests" -B "$root/smoke-$variant" -G "Unix Makefiles" \
     -DCMAKE_BUILD_TYPE=Release "-DOpenCV_DIR=$build" > "$run/smoke-configure.log" 2>&1
   "$cmake" --build "$root/smoke-$variant" > "$run/smoke-build.log" 2>&1
   "$root/smoke-$variant/opencv_smoke" > "$run/smoke.log" 2>&1
   grep -q 'image and matrix smoke checks passed' "$run/smoke.log"
-  python3 "$repo/ci/macos-dls-study.py" "record:$label" "$root" "$evidence" "$jobs"
-  python3 "$repo/ci/dls-source-evidence.py" compare --results "$evidence" --platform macos
+  python3 "$repo/ci/macos-dls-study.py" "record:$label" "$root" "$evidence" "$jobs" "${study_options[@]}"
+  if [ "$mode" = unchanged-reference ]; then
+    python3 "$repo/ci/$evidence_script" compare --results "$evidence" --generator Make
+  else
+    python3 "$repo/ci/dls-source-evidence.py" compare --results "$evidence" --platform macos
+  fi
 done
-python3 "$repo/ci/macos-dls-study.py" finish "$root" "$evidence" "$jobs"
+python3 "$repo/ci/macos-dls-study.py" finish "$root" "$evidence" "$jobs" "${study_options[@]}"

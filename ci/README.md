@@ -1,9 +1,12 @@
 # Hosted Arm build/storage screen
 
-**Branch note:** `perf/dls-source-ci-repair` prepares the
-[two-platform capture repair](DLS_SOURCE_EXPERIMENT.md) for parent audit.
-It retains the original Windows/Mac jobs and bounds and supersedes the
-unreleased Mac-only repair. The prior
+**Branch note:** `perf/msbuild-clserver-ci` prepares an unpublished
+[native MSBuild/CL-server pair](MSBUILD_CLSERVER_EXPERIMENT.md) for parent review.
+Both Windows cases require MSVC + MSBuild; Ninja/PCH is not compliant progress
+and its separate candidate remains on hold. Exactly two manual-only jobs:
+Windows Arm original/server (120 minutes), unchanged-source Mac Make reference
+(60 minutes). No publication/dispatch is performed by preparation.
+The prior [DLS capture repair](DLS_SOURCE_EXPERIMENT.md),
 [qualified native generators](QUALIFIED_GENERATORS.md)
 and the storage-screen description below are historical on this branch;
 neither storage crossover nor a workflow dispatch is authorized by preparation.

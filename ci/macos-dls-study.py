@@ -25,9 +25,9 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def frozen(root, expected=None):
+def frozen(root, expected=None, reference_only=False):
     files = []
-    for variant in ("base", "table"):
+    for variant in (("base",) if reference_only else ("base", "table")):
         build = root / (variant + "-build")
         for pattern in STABLE_MAKE_PATTERNS:
             files.extend(build.glob(pattern))
@@ -38,7 +38,7 @@ def frozen(root, expected=None):
             files.extend(Path(name) for name in CONFIGURED_TOOL.findall(cache.read_text(encoding="utf-8-sig"))
                          if name and not name.endswith("-NOTFOUND"))
     harness = Path(__file__).resolve().parents[1]
-    for owner in (harness, root / "table-harness"):
+    for owner in ((harness,) if reference_only else (harness, root / "table-harness")):
         files += [owner / "benchmark.json"]
         for directory in ("scripts", "tests", "toolchains"):
             files.extend(file for file in (owner / directory).rglob("*")
@@ -77,7 +77,9 @@ def assert_frozen(expected, current, evidence, action):
 
 
 def main():
-    action, root, evidence, jobs = sys.argv[1:]
+    action, root, evidence, jobs = sys.argv[1:5]
+    reference_only = sys.argv[5:] == ["unchanged-reference"]
+    order = ["warmup_baseline", "baseline_1", "baseline_2"] if reference_only else ORDER
     root, evidence, jobs = Path(root), Path(evidence), int(jobs)
     path = evidence / "study.json"
     if action == "initialize":
@@ -85,8 +87,9 @@ def main():
             raise FileExistsError(path)
         study = {
             "status": "running", "profile": "matched-23-definitions", "jobs": jobs,
-            "generator": "Unix Makefiles", "order": ORDER, "runs": [],
-            "warmups": 2, "warmups_excluded": True, "frozen_sha256": frozen(root),
+            "generator": "Unix Makefiles", "order": order, "runs": [],
+            "warmups": 1 if reference_only else 2, "warmups_excluded": True,
+            "frozen_sha256": frozen(root, reference_only=reference_only),
             "boundary": "Release make invocation only; provisioning/configure/clean/version/capture/smoke excluded.",
             "limitations": "Same-job source comparison, two scored observations each; hosted hardware uncontrolled. No cross-platform dependency/count equivalence, per-core normalization, parity prediction, numerical or runtime qualification. Text hash receipts are not retained-binary proof.",
         }
@@ -97,18 +100,21 @@ def main():
         path.write_text(json.dumps(study, indent=2), encoding="utf-8")
         return
     try:
-        provenance = json.loads((evidence / "source-variant.json").read_text())
-        for variant, commit in (("base", BASE), ("table", provenance["local_snapshot_commit"])):
+        variants = [("base", BASE)]
+        if not reference_only:
+            provenance = json.loads((evidence / "source-variant.json").read_text())
+            variants.append(("table", provenance["local_snapshot_commit"]))
+        for variant, commit in variants:
             for args, expected in ((("rev-parse", "HEAD"), commit),
                                    (("status", "--porcelain", "--untracked-files=no"), "")):
                 value = subprocess.run(["git", "-C", str(root / variant), *args],
                                        check=True, text=True, capture_output=True).stdout.strip()
                 if value != expected:
                     raise ValueError(f"Source pin/clean guard failed: {variant}")
-        assert_frozen(study["frozen_sha256"], frozen(root, study["frozen_sha256"]), evidence, action)
+        assert_frozen(study["frozen_sha256"], frozen(root, study["frozen_sha256"], reference_only), evidence, action)
         if action.startswith("record:"):
             label = action.split(":", 1)[1]
-            if label != ORDER[len(study["runs"])]:
+            if label != order[len(study["runs"])]:
                 raise ValueError("Unexpected observation order")
             directory = evidence / label
             timing = dict(line.split() for line in (directory / "time.log").read_text().splitlines())
@@ -127,7 +133,7 @@ def main():
                 "warmup": label.startswith("warmup_"), "build_seconds": float(timing["real"]),
             })
         if action == "finish":
-            if [run["label"] for run in study["runs"]] != ORDER:
+            if [run["label"] for run in study["runs"]] != order:
                 raise ValueError("Missing observations")
             study["status"] = "succeeded-awaiting-local-evidence-audit"
     except Exception as error:

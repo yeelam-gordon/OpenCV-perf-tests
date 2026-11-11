@@ -55,14 +55,17 @@ class MacFreezeTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
-    def run_action(self, action):
+    def run_action(self, action, reference_only=False):
         def git_result(args, **kwargs):
             value = ""
             if args[3] == "rev-parse":
                 value = mac.BASE if Path(args[2]).name == "base" else self.snapshot
             return subprocess.CompletedProcess(args, 0, stdout=value)
 
-        with patch.object(sys, "argv", ["macos-dls-study.py", action, str(self.root), str(self.evidence), "4"]), \
+        argv = ["macos-dls-study.py", action, str(self.root), str(self.evidence), "4"]
+        if reference_only:
+            argv.append("unchanged-reference")
+        with patch.object(sys, "argv", argv), \
                 patch.object(mac.subprocess, "run", side_effect=git_result):
             mac.main()
 
@@ -146,6 +149,18 @@ class MacFreezeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "1 missing"):
             self.run_action("initialize")
         self.assertEqual(json.loads((self.evidence / "study.json").read_text())["status"], "failed")
+
+    def test_single_unchanged_reference_needs_no_table_source_or_snapshot(self):
+        shutil.rmtree(self.root / "table-build")
+        shutil.rmtree(self.root / "table-harness")
+        (self.evidence / "source-variant.json").unlink()
+        self.run_action("initialize", reference_only=True)
+        record = json.loads((self.evidence / "study.json").read_text())
+        self.assertEqual(record["order"], ["warmup_baseline", "baseline_1", "baseline_2"])
+        self.assertEqual(record["warmups"], 1)
+        self.assertFalse(any("table" in name for name in record["frozen_sha256"]))
+        self.write(self.root / "base-build/compiler_depend.make", "mutable first-warmup dependencies")
+        self.run_action("guard", reference_only=True)
 
 
 if __name__ == "__main__":

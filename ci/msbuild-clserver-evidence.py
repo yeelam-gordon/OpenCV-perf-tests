@@ -219,6 +219,27 @@ def clock_outputs(outputs, owned):
             raise ValueError("Required compiler/link output not created inside owned clock")
 
 
+def compiled_flags(entries, source, build):
+    helper = load_module("msbuild-pch-evidence")
+    rows, seen = [], set()
+    for entry in entries:
+        tracker = PureWindowsPath(entry["tlog"])
+        if (tracker.anchor or ".." in tracker.parts or len(tracker.parts) < 4 or
+                tracker.name.lower() != "cl.command.1.tlog" or tracker.parent.suffix.lower() != ".tlog" or
+                tracker.parents[1].name.lower() != "release" or
+                not tracker.parents[2].name.lower().endswith(".dir")):
+            raise ValueError("Unexpected native compile tracker layout")
+        row = {"source": source_evidence.identity(Path(entry["file"]), source, build),
+               "project": str(tracker.parents[1]).replace("\\", "/").lower(),
+               "flags": helper.flags(entry, source, build)}
+        binding = row["source"], row["project"]
+        if binding in seen:
+            raise ValueError("Duplicate source/project compile binding")
+        seen.add(binding)
+        rows.append(row)
+    return sorted(rows, key=lambda row: (row["source"], row["project"], str(row["flags"])))
+
+
 def capture(source, build, run, path, generator, configuration="original"):
     source_guard(source)
     if generator == "Make":
@@ -290,12 +311,7 @@ def capture(source, build, run, path, generator, configuration="original"):
             "proof_scope": "Actual runner-local copies; uploaded text hashes are not retained-binary proof.",
         })
         if data.get("combined"):
-            helper = load_module("msbuild-pch-evidence")
-            write(run / "compiled-flags.json", sorted([
-                {"source": source_evidence.identity(Path(entry["file"]), source, build),
-                 "project": str(PureWindowsPath(entry["tlog"]).parent).replace("\\", "/").lower(),
-                 "flags": helper.flags(entry, source, build)} for entry in entries
-            ], key=lambda row: (row["source"], row["project"], str(row["flags"]))))
+            write(run / "compiled-flags.json", compiled_flags(entries, source, build))
     if source_evidence.load(run / "native-clean.json")["status"] != "passed":
         raise ValueError("Missing preclock native clean receipt")
     inputs = []

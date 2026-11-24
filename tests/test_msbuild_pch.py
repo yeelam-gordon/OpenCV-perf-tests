@@ -218,6 +218,38 @@ class CombinedGuards(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "diagnostic"):
                 pch.diagnostics(message)
 
+    def test_compiled_flags_preserve_project_not_tracker_directory_hash(self):
+        baseline = self.build / "original"
+        combined = self.build / "combined"
+        original = {"file": str(self.source / "apps/annotation/unit.cpp"),
+                    "tlog": "apps/annotation/opencv_annotation.dir/Release/opencv_a.2261d1b8.tlog/CL.command.1.tlog",
+                    "command": f'cl /O2 /EHa /MD /I"{baseline}/include"'}
+        candidate = dict(original, tlog=original["tlog"].replace("2261d1b8", "348bbb38"),
+                         command=original["command"].replace(str(baseline), str(combined)))
+        expected = main.compiled_flags([original], self.source, baseline)
+        self.assertEqual(expected, main.compiled_flags([candidate], self.source, combined))
+        self.assertEqual(expected[0]["project"], "apps/annotation/opencv_annotation.dir/release")
+        for field, value in (("tlog", candidate["tlog"].replace("opencv_annotation.dir", "wrong_target.dir")),
+                             ("file", str(self.source / "apps/annotation/other.cpp")),
+                             ("command", candidate["command"].replace("/O2", "/O1"))):
+            with self.subTest(field=field):
+                changed = dict(candidate, **{field: value})
+                self.assertNotEqual(expected, main.compiled_flags([changed], self.source, combined))
+
+    def test_compiled_flags_reject_ambiguous_or_escaping_tracker_bindings(self):
+        entry = {"file": str(self.source / "unit.cpp"), "command": "cl /O2 /EHa /MD",
+                 "tlog": "modules/world/opencv_world.dir/Release/opencv_world.tlog/CL.command.1.tlog"}
+        for tracker in (entry["tlog"].replace("/Release/", "/Debug/"),
+                        "../" + entry["tlog"], "C:/" + entry["tlog"],
+                        "/" + entry["tlog"], "C:" + entry["tlog"],
+                        entry["tlog"].replace("opencv_world.tlog", "unexpected"),
+                        entry["tlog"].replace("CL.command", "Link.command")):
+            with self.subTest(tracker=tracker), self.assertRaisesRegex(ValueError, "tracker layout"):
+                main.compiled_flags([dict(entry, tlog=tracker)], self.source, self.build)
+        duplicate = dict(entry, tlog=entry["tlog"].replace("opencv_world.tlog", "other_hash.tlog"))
+        with self.assertRaisesRegex(ValueError, "Duplicate source/project"):
+            main.compiled_flags([entry, duplicate], self.source, self.build)
+
     def test_actual_yc_yu_fi_fp_mp_and_context_must_match(self):
         units, profile = self.partition(self.units())
         wrapper = pch.wrapper_input(profile)

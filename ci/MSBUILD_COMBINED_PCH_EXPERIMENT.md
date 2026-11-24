@@ -14,16 +14,25 @@ Those are not denominators or forecasts for this new direct combined pair.
 ## Manual bounded launch contract
 
 Repository `yeelam-gordon/OpenCV-perf-tests`, experiment ref
-`perf/msbuild-pch-nested-repair`, exact repair base
-`650ae9a8a37d6d5d443e1729eb5c427fa4543048`. Reuse registered workflow
+`perf/msbuild-pch-tracker-parity`, exact repair base
+`0d898d2ad6305051427c30a57a655421831579a5`. Reuse registered workflow
 **412734614**, `.github/workflows/hosted-arm-storage.yml`, manual dispatch on
 the reviewed new ref only. No settings, default-branch or capacity change and
 no automatic retry. Exactly Windows `windows-11-arm` / 120 minutes and Mac
-`macos-15` / 60 minutes.
+`macos-15` / 60 minutes by default. For a Windows-only repair, explicitly set
+dispatch input `run_macos=false` and preserve the independently audited successful
+Mac artifact instead of consuming another runner. Record both commits and
+confirm the Mac execution payload is unchanged before pairing references.
 
 Historical combined ref `perf/msbuild-clserver-pch-ci` at that base produced
 run 43087870068; Windows failed metadata planning before warmups or scores.
 Its failed tree, artifact and log remain historical evidence, not a repair run.
+The nested-path repair reached both excluded Windows warmups in run45297421317,
+then rejected path-derived tracking-folder names as project-context drift.
+No Windows score ran. This repair binds flags to the source and relative
+project/configuration directory, omitting only the terminal tracker container.
+Unexpected layouts and duplicate source/project bindings still fail; semantic
+flags and native output bindings retain their existing checks.
 
 Windows excludes two warmups (original/combined), then scores
 original/combined/combined/original: **six total builds, not three profiles

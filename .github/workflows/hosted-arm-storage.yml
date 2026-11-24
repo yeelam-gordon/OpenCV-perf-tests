@@ -2,6 +2,11 @@ name: Native MSBuild combined stdlib-PCH paired qualification
 
 on:
   workflow_dispatch:
+    inputs:
+      run_macos:
+        description: Run a fresh Mac reference (disable when preserving an audited successful lane)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -64,6 +69,7 @@ jobs:
             evidence/**/*.cmake
           if-no-files-found: error
   macos:
+    if: ${{ inputs.run_macos }}
     name: macOS Arm unchanged-source matched-definition Make reference
     runs-on: macos-15
     timeout-minutes: 60

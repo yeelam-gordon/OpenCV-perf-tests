@@ -7,6 +7,13 @@ on:
         description: Run a fresh Mac reference (disable when preserving an audited successful lane)
         type: boolean
         default: true
+      pch_header_set:
+        description: Fixed world stdlib PCH set (ten qualifies total original-to-combined effect)
+        type: choice
+        options:
+          - six
+          - ten
+        default: six
 
 permissions:
   contents: read
@@ -28,6 +35,7 @@ jobs:
         shell: pwsh
         env:
           HOSTING: ${{ runner.environment }}
+          PCH_HEADER_SET: ${{ inputs.pch_header_set }}
         run: |
           try {
             .\tests\test_native_generator_selection.ps1
@@ -39,7 +47,7 @@ jobs:
             python -m unittest discover -s tests -p 'test_msbuild_pch*.py'
             if ($LASTEXITCODE) { throw 'MSBuild PCH guards failed.' }
             .\tests\test_owned_build.ps1
-            .\ci\Prepare-QualifiedGeneratorWorkload.ps1 -MSBuildOnly -CombinedPch
+            .\ci\Prepare-QualifiedGeneratorWorkload.ps1 -MSBuildOnly -CombinedPch -PchHeaderSet $env:PCH_HEADER_SET
           } catch {
             New-Item -ItemType Directory -Force evidence | Out-Null
             $_ | Out-String | Set-Content evidence\preparation-failure.log
@@ -47,9 +55,11 @@ jobs:
           }
       - name: Run direct balanced original/combined pair
         shell: pwsh
+        env:
+          PCH_HEADER_SET: ${{ inputs.pch_header_set }}
         run: |
           try {
-            .\ci\Run-MSBuildCombinedPchStudy.ps1 -ResultsDir "$env:GITHUB_WORKSPACE\evidence\builds"
+            .\ci\Run-MSBuildCombinedPchStudy.ps1 -ResultsDir "$env:GITHUB_WORKSPACE\evidence\builds" -PchHeaderSet $env:PCH_HEADER_SET
           } catch {
             $_ | Out-String | Set-Content evidence\study-failure.log
             throw

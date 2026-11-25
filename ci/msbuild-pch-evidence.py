@@ -6,6 +6,7 @@ import re
 import xml.etree.ElementTree as ET
 
 HEADERS = ("vector", "algorithm", "string", "memory", "utility", "limits")
+HEADER_SETS = {"six": HEADERS, "ten": HEADERS + ("mutex", "ostream", "cmath", "functional")}
 PCH_FIELDS = ("PrecompiledHeader", "PrecompiledHeaderFile", "PrecompiledHeaderOutputFile",
               "ForcedIncludeFiles", "MultiProcessorCompilation", "EnableClServerMode")
 WORLD_TLOG = "modules/world/opencv_world.dir/release/opencv_world.tlog/cl.command.1.tlog"
@@ -20,17 +21,26 @@ def path(value, project):
     return (result if result.is_absolute() else Path(project).parent / result).resolve()
 
 
-def standard_header(file):
+def headers(header_set):
+    if not isinstance(header_set, str) or header_set not in HEADER_SETS:
+        raise ValueError("PCH header set must be six or ten")
+    return HEADER_SETS[header_set]
+
+
+def standard_header(file, header_set="six"):
     includes = re.findall(r"^\s*#\s*include\s+(.+?)\s*$", file.read_text(), re.M)
-    if includes != ["<" + name + ">" for name in HEADERS]:
-        raise ValueError("PCH wrapper must contain exactly six standard headers")
+    if includes != ["<" + name + ">" for name in headers(header_set)]:
+        raise ValueError(f"PCH wrapper must contain exactly {header_set} standard headers")
 
 
 def wrapper_input(profile):
+    header_set = profile.get("header_set", "six")
+    if tuple(profile["headers"]) != headers(header_set):
+        raise ValueError("PCH header metadata differs from fixed header set")
     wrapper = Path(profile["wrapper"])
     if hashlib.sha256(wrapper.read_bytes()).hexdigest() != profile["wrapper_sha256"]:
         raise ValueError("Frozen PCH wrapper input changed")
-    standard_header(wrapper)
+    standard_header(wrapper, header_set)
     return wrapper
 
 
@@ -84,7 +94,8 @@ def paired_units(original, combined, source, original_build, combined_build):
         raise ValueError("Per-source/target context or output drift beyond roots/PCH bookkeeping")
 
 
-def partition(units, source, build, world_base, expected_consumers=513):
+def partition(units, source, build, world_base, expected_consumers=513, header_set="six"):
+    expected_headers = headers(header_set)
     created = [unit for unit in units if producer(unit["file"])]
     consumers = [unit for unit in units if unit["pch"]["PrecompiledHeader"].lower() == "use"]
     if len(created) != 1 or len(consumers) != expected_consumers:
@@ -123,12 +134,12 @@ def partition(units, source, build, world_base, expected_consumers=513):
         raise ValueError("Producer CPP context differs from original native WORLD base")
     if Path(first["output"]) != artifacts[1]:
         raise ValueError("Unexpected native producer object binding")
-    standard_header(wrapper)
+    standard_header(wrapper, header_set)
     return [unit for unit in units if unit not in created], {
         "producer": first, "artifacts": [str(file) for file in artifacts],
         "wrapper": str(wrapper), "wrapper_sha256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
         "world_base": world_base,
-        "headers": HEADERS, "consumers": len(consumers),
+        "header_set": header_set, "headers": expected_headers, "consumers": len(consumers),
         "mp_scope": "Native evaluated MP=true and CL-server=true; MSBuild excludes /MP from CL command tracking. No resident/busy/global cap proof.",
     }
 
@@ -190,7 +201,7 @@ def commands(entries, source, build, profile, principal, original):
             (token.replace('"', "").startswith("/FI") and "cmake_pch" in token.lower())
             for token in tokens(entry["command"])):
             raise ValueError("Actual PCH leaked outside world consumers")
-    standard_header(wrapper)
+    standard_header(wrapper, profile.get("header_set", "six"))
     return [entry for entry in entries if entry not in created]
 
 

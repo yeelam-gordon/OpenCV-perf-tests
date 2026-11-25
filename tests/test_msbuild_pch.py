@@ -42,16 +42,16 @@ class CombinedGuards(unittest.TestCase):
                 "context": {"PreprocessorDefinitions": "_WINDLL;NDEBUG", "ExceptionHandling": "Async",
                             "RuntimeLibrary": "MultiThreadedDLL", "FloatingPointModel": "Precise", "ForcedIncludeFiles": ""}}
 
-    def partition(self, units):
-        return pch.partition(units, self.source, self.build, self.base())
+    def partition(self, units, header_set="six"):
+        return pch.partition(units, self.source, self.build, self.base(), header_set=header_set)
 
-    def units(self):
+    def units(self, header_set="six"):
         project = self.build / "modules/world/opencv_world.vcxproj"
         directory = project.parent / "opencv_world.dir/Release"
         source = project.parent / "CMakeFiles/opencv_world.dir/cmake_pch.cxx"
         template = source.parent / "Release/cmake_pch.hxx"
         template.parent.mkdir(parents=True, exist_ok=True)
-        template.write_text("\n".join("#include <" + name + ">" for name in pch.HEADERS))
+        template.write_text("\n".join("#include <" + name + ">" for name in pch.headers(header_set)))
         units = []
         for index in range(514):
             created = index == 513
@@ -176,8 +176,43 @@ class CombinedGuards(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "six standard"):
             self.partition(units)
 
+    def test_ten_headers_opt_in_keeps_partition_and_rejects_mismatched_sets(self):
+        units = self.units("ten")
+        sources, profile = pch.partition(units, self.source, self.build, self.base(), header_set="ten")
+        self.assertEqual((len(sources), profile["consumers"], profile["header_set"]), (513, 513, "ten"))
+        wrapper = pch.wrapper_input(profile)
+        with self.assertRaisesRegex(ValueError, "six standard"):
+            self.partition(units)
+        for changed in ("unknown", "TEN", ["vector"]):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "six or ten"):
+                pch.headers(changed)
+        bad = dict(profile, headers=profile["headers"] + ("opencv2/core.hpp",))
+        with self.assertRaisesRegex(ValueError, "metadata differs"):
+            pch.wrapper_input(bad)
+        bad = dict(profile, header_set="six")
+        with self.assertRaisesRegex(ValueError, "metadata differs"):
+            pch.wrapper_input(bad)
+        for names in (pch.HEADERS, tuple(reversed(pch.headers("ten"))),
+                      pch.headers("ten")[:-1] + ("opencv2/core.hpp",)):
+            wrapper.write_text("\n".join("#include <" + name + ">" for name in names))
+            bad = dict(profile, wrapper_sha256=main.source_evidence.sha(wrapper))
+            with self.subTest(names=names), self.assertRaisesRegex(ValueError, "ten standard"):
+                pch.wrapper_input(bad)
+
+    def test_planner_rejects_unknown_or_standalone_ten_before_native_work(self):
+        with patch.object(main, "source_guard") as guard:
+            for header_set in ("unknown", "ten"):
+                with self.subTest(header_set=header_set), self.assertRaisesRegex(ValueError, "six/ten"):
+                    main.plan(self.source, self.build, self.run / "plan.json", pch_header_set=header_set)
+            guard.assert_not_called()
+
     def test_native_clean_and_profile_contamination(self):
-        units, profile = self.partition(self.units())
+        for header_set in ("six", "ten"):
+            with self.subTest(header_set=header_set):
+                self.check_native_clean_and_profile_contamination(header_set)
+
+    def check_native_clean_and_profile_contamination(self, header_set):
+        units, profile = self.partition(self.units(header_set), header_set)
         standard = [dict(units[0], output=str(self.build / f"u{i}.obj")) for i in range(1015)]
         temp = str(self.root / "compiler-temp")
         plan = {"combined": True, "compiler_temp": temp, "features": {},
@@ -251,7 +286,12 @@ class CombinedGuards(unittest.TestCase):
             main.compiled_flags([entry, duplicate], self.source, self.build)
 
     def test_actual_yc_yu_fi_fp_mp_and_context_must_match(self):
-        units, profile = self.partition(self.units())
+        for header_set in ("six", "ten"):
+            with self.subTest(header_set=header_set):
+                self.check_actual_yc_yu_fi_fp_mp_and_context(header_set)
+
+    def check_actual_yc_yu_fi_fp_mp_and_context(self, header_set):
+        units, profile = self.partition(self.units(header_set), header_set)
         wrapper = pch.wrapper_input(profile)
         entries = []
         for unit in units + [profile["producer"]]:
@@ -330,17 +370,52 @@ class CombinedGuards(unittest.TestCase):
                   "world_principal": [["fixture", {"eh": ["EHa"], "crt": ["MD"]}]]}
         runs = [{"label": name, "directory": name, "configuration": name, "warmup": False, "build_seconds": 1}
                 for name in ("original", "combined")]
-        main.write(self.run / "study.json", {"combined_pch": True, "runs": runs})
+        main.write(self.run / "study.json", {"combined_pch": True, "runs": runs,
+                                           "pch_header_set": "six", "pch_headers": pch.HEADERS})
         for name in ("original", "combined"):
             directory = self.run / name
             directory.mkdir()
             main.write(directory / "source-workload.json", record)
             main.write(directory / "compiled-inputs.json", [{"source": "fixture", "source_sha256": "same", "suffix": ".cpp"}])
             main.write(directory / "compiled-flags.json", [{"source": "fixture", "flags": ["/MP", "/O2"]}])
+            wrapper = directory / "pch-wrapper.txt"
+            if name == "combined":
+                wrapper.write_text("\n".join("#include <" + header + ">" for header in pch.HEADERS))
             main.write(directory / "native-output.json", {"source_objects": 1015, "producer_objects": int(name == "combined"),
                        "pch_outputs": dict.fromkeys(("pch", "obj"), "receipt") if name == "combined" else {},
-                       "pch_inputs": {"sha256": "frozen-wrapper-receipt"} if name == "combined" else {}})
+                       "pch_inputs": {"sha256": main.source_evidence.sha(wrapper), "header_set": "six",
+                                      "headers": pch.HEADERS} if name == "combined" else {}})
         main.compare(self.run, "MSBuild")
+        study = main.source_evidence.load(self.run / "study.json")
+        study.update(pch_header_set="ten", pch_headers=pch.headers("ten"))
+        main.write(self.run / "study.json", study)
+        with self.assertRaisesRegex(ValueError, "header set mismatch"):
+            main.compare(self.run, "MSBuild")
+        wrapper = self.run / "combined/pch-wrapper.txt"
+        wrapper.write_text("\n".join("#include <" + header + ">" for header in pch.headers("ten")))
+        output_path = self.run / "combined/native-output.json"
+        output = main.source_evidence.load(output_path)
+        output["pch_inputs"].update(sha256=main.source_evidence.sha(wrapper),
+                                   header_set="ten", headers=pch.headers("ten"))
+        main.write(output_path, output)
+        main.compare(self.run, "MSBuild")
+        for names in (pch.HEADERS, pch.headers("ten") + ("windows.h",)):
+            output["pch_inputs"]["headers"] = names
+            main.write(output_path, output)
+            with self.assertRaisesRegex(ValueError, "header set mismatch"):
+                main.compare(self.run, "MSBuild")
+        output["pch_inputs"]["headers"] = pch.headers("ten")
+        main.write(output_path, output)
+        wrapper.write_text(wrapper.read_text() + "\n#include <windows.h>\n")
+        with self.assertRaisesRegex(ValueError, "wrapper differs"):
+            main.compare(self.run, "MSBuild")
+        output["pch_inputs"]["sha256"] = main.source_evidence.sha(wrapper)
+        main.write(output_path, output)
+        with self.assertRaisesRegex(ValueError, "ten standard"):
+            main.compare(self.run, "MSBuild")
+        wrapper.write_text("\n".join("#include <" + header + ">" for header in pch.headers("ten")))
+        output["pch_inputs"]["sha256"] = main.source_evidence.sha(wrapper)
+        main.write(output_path, output)
         main.write(self.run / "combined/compiled-flags.json", [{"source": "fixture", "flags": ["/MP", "/O1"]}])
         with self.assertRaisesRegex(ValueError, "context drift"):
             main.compare(self.run, "MSBuild")

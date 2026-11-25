@@ -6,9 +6,15 @@ param(
     [string]$LLVMRoot = '',
     [string]$InitialCache = '',
     [string]$CMake = '',
-    [string]$BuildDirectory = ''
+    [string]$BuildDirectory = '',
+    [ValidateSet('', 'six', 'ten')][string]$PchHeaderSet = ''
 )
 . "$PSScriptRoot\common.ps1"
+if ($PchHeaderSet -and ($Generator -ne 'MSBuild' -or $Toolchain -ne 'MSVC2026' -or
+    -not $InitialCache -or [IO.Path]::GetFullPath($InitialCache) -ne
+    [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\ci\msbuild-stdlib-pch-cache.cmake')))) {
+    throw ' ERROR - PchHeaderSet requires the owned MSBuild/MSVC2026 stdlib PCH cache.'
+}
 $Root = Get-SourceRoot $Root
 $Generator = Get-EffectiveGenerator $Generator $Toolchain ($PSBoundParameters.ContainsKey('Generator'))
 if ($LLVMRoot -and $Toolchain -ne 'Clang') { throw ' ERROR - LLVMRoot is only valid with -Toolchain Clang.' }
@@ -41,6 +47,7 @@ if ($InitialCache) {
     $argsList += @('-C', $InitialCache)
     $initialCacheReceipt = @{ path = $InitialCache; sha256 = (Get-FileHash -LiteralPath $InitialCache).Hash }
 }
+if ($PchHeaderSet) { $argsList += "-DOPENCV_MSBUILD_PCH_HEADER_SET:STRING=$PchHeaderSet" }
 if ($Generator -eq 'MSBuild') {
     $vsGenerator = if ($vsMajor -eq 18) { 'Visual Studio 18 2026' } else { 'Visual Studio 17 2022' }
     $platform = if ($arch -eq 'arm64') { 'ARM64' } else { 'x64' }
@@ -164,6 +171,7 @@ $receipt = [ordered]@{
     windows_sdk = $sdk
     config_sha256 = (Get-FileHash "$PSScriptRoot\..\benchmark.json").Hash
     initial_cache = $initialCacheReceipt
+    pch_header_set = if ($PchHeaderSet) { $PchHeaderSet } else { $null }
 }
 $receipt | ConvertTo-Json -Depth 6 | Set-Content "$buildDir\benchmark-setup.json"
 Write-Host "Configured $buildDir in ${configureTime}s (excluded from benchmark)."

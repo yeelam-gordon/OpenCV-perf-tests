@@ -4,10 +4,13 @@ param(
     [string]$SourceRoot = '',
     [switch]$IncludeOriginal,
     [switch]$ClServerStudy,
-    [switch]$CombinedPch
+    [switch]$CombinedPch,
+    [ValidateSet('six', 'ten')][string]$PchHeaderSet = 'six'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($CombinedPch -and -not $ClServerStudy) { throw ' ERROR - Combined PCH requires the owned native MSBuild study.' }
+if (-not $CombinedPch -and $PchHeaderSet -ne 'six') { throw ' ERROR - Ten headers require the combined PCH profile.' }
 $root = Split-Path $PSScriptRoot
 $harness = $root
 $source = if ($SourceRoot) { [IO.Path]::GetFullPath($SourceRoot) } else {
@@ -15,7 +18,6 @@ $source = if ($SourceRoot) { [IO.Path]::GetFullPath($SourceRoot) } else {
 }
 $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 . (Join-Path $harness 'scripts\common.ps1')
-if ($CombinedPch -and -not $ClServerStudy) { throw ' ERROR - Combined PCH requires the owned native MSBuild study.' }
 Assert-Source $source
 if ($ClServerStudy) {
     if ($env:GITHUB_ACTIONS -ne 'true' -or [Environment]::ProcessorCount -ne 4 -or
@@ -66,9 +68,10 @@ if ($ClServerStudy) {
     $study['limitations'] = 'Different-residency resource profile; not a four-resident/busy/global cap. Two scored observations per case; no historical/local transfer, forecast or adoption.'
 }
 if ($CombinedPch) {
-    $study.scope = 'New direct original MSVC/MSBuild versus shared4 + CL-server + private six-standard-header world PCH.'
+    $study.scope = "New direct original MSVC/MSBuild versus shared4 + CL-server + private $PchHeaderSet-standard-header world PCH; total combined effect, not six-to-ten increment."
     $study.order = @('warmup_original', 'warmup_combined', 'original_1', 'combined_1', 'combined_2', 'original_2')
     $study['combined_pch'] = $true
+    $study['pch_header_set'] = $PchHeaderSet
 }
 $frozen = @{}
 $builds = @{}
@@ -116,10 +119,11 @@ try {
     if ($ClServerStudy) {
         if (-not ('BuildAccounting' -as [type])) { Add-Type -Path (Join-Path $harness 'scripts\BuildAccounting.cs') }
         $plan = Join-Path $ResultsDir 'native-plan.json'
-        $planOptions = if ($CombinedPch) { @('--candidate-build', $builds.combined) } else { @() }
+        $planOptions = if ($CombinedPch) { @('--candidate-build', $builds.combined, '--pch-header-set', $PchHeaderSet) } else { @() }
         & $python (Join-Path $PSScriptRoot 'msbuild-clserver-evidence.py') plan --source $source --build $builds.MSBuild --plan $plan @planOptions
         if ($LASTEXITCODE) { throw ' ERROR - Native MSBuild source/profile plan failed.' }
         $nativePlan = Get-Content -LiteralPath $plan -Raw | ConvertFrom-Json
+        if ($CombinedPch) { $study['pch_headers'] = @($nativePlan.cases.combined.pch.headers) }
         $setup = Get-Content -LiteralPath (Join-Path $builds.MSBuild 'benchmark-setup.json') -Raw | ConvertFrom-Json
         $inputs = @(Get-Item -LiteralPath $plan, $nativePlan.stock_server_targets,
             $setup.compiler, $setup.cmake, $setup.build_engine.path, $setup.build_engine.linker)

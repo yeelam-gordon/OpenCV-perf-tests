@@ -77,7 +77,9 @@ def query(msbuild, project, settings, extra=()):
     return json.loads(result.stdout)
 
 
-def plan(source, build, path, candidate_build=None):
+def plan(source, build, path, candidate_build=None, pch_header_set="six"):
+    if pch_header_set not in ("six", "ten") or (not candidate_build and pch_header_set != "six"):
+        raise ValueError("Fixed six/ten header set requires combined PCH for ten")
     source_guard(source)
     temp = Path(os.environ["TEMP"])
     temp_guard(temp, Path(os.environ["RUNNER_TEMP"]))
@@ -139,7 +141,9 @@ def plan(source, build, path, candidate_build=None):
         pch = None
         if mode == "combined":
             world_base = pch_helper.common_world_base(cases["original"]["units"], source, build)
-            units, pch = pch_helper.partition(units, source, selected, world_base)
+            if (selected_setup.get("pch_header_set") or "six") != pch_header_set:
+                raise ValueError("Configured PCH header set differs from requested plan")
+            units, pch = pch_helper.partition(units, source, selected, world_base, header_set=pch_header_set)
         if len(units) != 1015 or sum("3rdparty/openexr/" in unit["identity"] for unit in units) != 107:
             raise ValueError("Expected 1015 original compiler units including 107 OpenEXR")
         if len({unit["output"] for unit in units}) != len(units):
@@ -292,6 +296,7 @@ def capture(source, build, run, path, generator, configuration="original"):
             shutil.copyfile(wrapper, run / "pch-wrapper.txt")
             pch_inputs = {"wrapper": str(wrapper.resolve().relative_to(build.resolve())),
                           "sha256": source_evidence.sha(wrapper),
+                          "header_set": pch["header_set"], "headers": pch["headers"],
                           "scope": "Frozen configure-time input; no clean-deletion or in-clock timestamp requirement."}
         elif any(re.search(r'(?i)(?:^|[\s"])/Y[cu]', entry["command"]) for entry in entries):
             raise ValueError("PCH compiler options are outside this experiment")
@@ -344,6 +349,19 @@ def compare(results, generator):
                 raise ValueError("Missing combined-cohort producer/native-output proof")
             if expected_producers and not output.get("pch_inputs", {}).get("sha256"):
                 raise ValueError("Missing frozen PCH wrapper input proof")
+            if expected_producers:
+                helper = load_module("msbuild-pch-evidence")
+                header_set = study.get("pch_header_set", "six")
+                expected_headers = helper.headers(header_set)
+                receipt = output["pch_inputs"]
+                if (receipt.get("header_set") != header_set or
+                        tuple(receipt.get("headers", ())) != expected_headers or
+                        tuple(study.get("pch_headers", ())) != expected_headers):
+                    raise ValueError("Study/PCH receipt header set mismatch")
+                wrapper = run / "pch-wrapper.txt"
+                if source_evidence.sha(wrapper) != receipt["sha256"]:
+                    raise ValueError("Retained frozen PCH wrapper differs")
+                helper.standard_header(wrapper, header_set)
         record = source_evidence.load(run / "source-workload.json")
         if (record["source_commit"], record["source_tree"], record["source_blob"]) != (BASE, TREE, BLOB):
             raise ValueError("BASE source drift")
@@ -381,9 +399,10 @@ def main():
         parser.add_argument("--" + name, type=Path)
     parser.add_argument("--generator", choices=("MSBuild", "Make"), default="MSBuild")
     parser.add_argument("--configuration", choices=("original", "server", "combined"), default="original")
+    parser.add_argument("--pch-header-set", choices=("six", "ten"), default="six")
     args = parser.parse_args()
     if args.action == "plan":
-        plan(args.source, args.build, args.plan, args.candidate_build)
+        plan(args.source, args.build, args.plan, args.candidate_build, args.pch_header_set)
     elif args.action == "clean":
         clean(args.source, args.build, args.run, args.plan, args.generator, args.configuration)
     elif args.action == "capture":

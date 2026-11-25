@@ -13,6 +13,15 @@ Those are not denominators or forecasts for this new direct combined pair.
 
 ## Manual bounded launch contract
 
+The local-only next-step candidate is `perf/msbuild-extended-pch-ci-20261125`,
+based on public benchmark commit `e8ff35749914f120f5e8793121223d018e26d278`.
+It adds only the opt-in fixed header-set selector described below. Preparation
+does not authorize push, dispatch or publication. Independent artifact-fidelity
+audit, native validation and parent final review remain pending; no local
+timing transfers to CI, adoption or universal NoReg claims.
+
+The preceding six-header repair contract was:
+
 Repository `yeelam-gordon/OpenCV-perf-tests`, experiment ref
 `perf/msbuild-pch-tracker-parity`, exact repair base
 `0d898d2ad6305051427c30a57a655421831579a5`. Reuse registered workflow
@@ -59,7 +68,9 @@ The directory/profile guards reject baseline contamination.
 All **1,015 original source units**, including 107 OpenEXR units, remain
 required. Combined adds **exactly one** generated CXX producer and exactly
 **513 main-world CXX consumers**. The header list is exactly `vector`,
-`algorithm`, `string`, `memory`, `utility`, `limits`. No OpenCV, Windows,
+`algorithm`, `string`, `memory`, `utility`, `limits` by default (`six`).
+The explicit opt-in `ten` appends only `mutex`, `ostream`, `cmath`, `functional`
+in that order. No OpenCV, Windows,
 iostream, module or private header is cached. C/static/dispatched/object
 targets must not consume this PCH. DNN's source-level macro undef behavior
 is untouched.
@@ -69,7 +80,7 @@ is untouched.
 The CMake hook uses plain modern PRIVATE `target_precompile_headers`, matching
 the qualified local configuration, with legacy world PCH disabled. CMake's
 canonical config-specific wrapper under `CMakeFiles/opencv_world.dir/Release`
-is a **configure-time input**, like `cvconfig.h`: freeze its exact six includes,
+is a **configure-time input**, like `cvconfig.h`: freeze its exact selected includes,
 byte hash and native Yc/Yu/FI bindings. It legitimately remains outside native
 `IntDir` across Clean and need not have an in-clock timestamp.
 
@@ -122,3 +133,42 @@ library/executable/token uploads. Cloud hashes are receipts, not retained
 binary proof. Mac's unchanged 908-language-unit Make boundary, ObjC++/assembly
 and stable-only freeze remain intact; do not normalize it to Windows counts
 or remove Windows OpenEXR work.
+
+## Fixed six/ten selection and future validation
+
+Workflow input `pch_header_set` defaults to `six`; `ten` selects the same
+original/combined two-profile pair, not a third profile. The ten-header CI
+candidate qualifies **total original → combined10**, not an isolated
+combined6 → combined10 increment. `run_macos` and the Mac Make payload remain
+unchanged. Windows still has two excluded warmups plus C/V/V/C, six builds.
+
+`-PchHeaderSet six|ten` is threaded through preparation, the thin combined
+entrypoint, runner and the owned setup cache. CMake accepts only
+`OPENCV_MSBUILD_PCH_HEADER_SET=six|ten`. Planner, study and native-output receipts
+freeze the selection and known ordered includes. Actual generated and retained
+wrappers must match the selected fixed set, even if metadata/hash is changed;
+arbitrary header metadata is never proof.
+
+After the parent clears the competing native workload, configure locally using
+existing discovered tool paths and a fresh owned source/build directory:
+
+```powershell
+.\scripts\setup.ps1 -Root $source -Generator MSBuild -Toolchain MSVC2026 -CMake $cmake
+$combined = Join-Path $source 'build_hobl_msvc2026_combined'
+.\scripts\setup.ps1 -Root $source -Generator MSBuild -Toolchain MSVC2026 -CMake $cmake `
+  -BuildDirectory $combined -InitialCache (Join-Path $PWD 'ci\msbuild-stdlib-pch-cache.cmake') -PchHeaderSet ten
+python .\ci\msbuild-clserver-evidence.py plan --source $source `
+  --build (Join-Path $source 'build_hobl_msvc2026') --candidate-build $combined `
+  --pch-header-set ten --plan $plan
+python -m unittest discover -s tests -p 'test_msbuild*.py'
+```
+
+The native planner still requires matching process-owned, whitespace-free
+`TEMP`/`TMP` beneath `RUNNER_TEMP`, original tool/source/profile checks, and a
+fresh `$plan` receipt. Tool pins and the source commit must already satisfy the
+owned setup; these commands do not waive discovery or isolation guards.
+For an independently authorized hosted execution, preparation is
+`.\ci\Prepare-QualifiedGeneratorWorkload.ps1 -MSBuildOnly -CombinedPch -PchHeaderSet ten`
+and the existing paired entry is
+`.\ci\Run-MSBuildCombinedPchStudy.ps1 -ResultsDir $results -PchHeaderSet ten`.
+Neither was run to prepare this candidate.

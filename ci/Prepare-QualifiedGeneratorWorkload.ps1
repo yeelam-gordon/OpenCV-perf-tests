@@ -1,9 +1,13 @@
 #Requires -Version 7.0
-param([switch]$DlsSource, [switch]$MSBuildOnly, [switch]$CombinedPch)
+param(
+    [switch]$DlsSource, [switch]$MSBuildOnly, [switch]$CombinedPch,
+    [ValidateSet('six', 'ten')][string]$PchHeaderSet = 'six'
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($DlsSource -and $MSBuildOnly) { throw ' ERROR - Source variants are not part of the MSBuild-only experiment.' }
 if ($CombinedPch -and (-not $MSBuildOnly -or $DlsSource)) { throw ' ERROR - Combined PCH requires the MSBuild-only setup.' }
+if (-not $CombinedPch -and $PchHeaderSet -ne 'six') { throw ' ERROR - Ten headers require the combined PCH profile.' }
 $repo = Split-Path $PSScriptRoot
 . (Join-Path $repo 'scripts\common.ps1')
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:HOSTING -ne 'github-hosted' -or
@@ -72,7 +76,8 @@ $ninjaDir = Get-BuildDirectory $source 'Ninja' 'MSVC2026'
 if ($CombinedPch) {
     $combined = Join-Path $source 'build_hobl_msvc2026_combined'
     & (Join-Path $repo 'scripts\setup.ps1') -Root $source -Generator MSBuild -Toolchain MSVC2026 `
-        -CMake $cmake -BuildDirectory $combined -InitialCache (Join-Path $PSScriptRoot 'msbuild-stdlib-pch-cache.cmake')
+        -CMake $cmake -BuildDirectory $combined -InitialCache (Join-Path $PSScriptRoot 'msbuild-stdlib-pch-cache.cmake') `
+        -PchHeaderSet $PchHeaderSet
     foreach ($name in @('cvconfig.h', 'opencv2\opencv_modules.hpp', 'cv_cpu_config.h')) {
         if ((Get-FileHash -LiteralPath (Join-Path $msbuildDir $name)).Hash -ne
             (Get-FileHash -LiteralPath (Join-Path $combined $name)).Hash) { throw ' ERROR - Combined profile feature drift.' }
